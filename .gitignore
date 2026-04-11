@@ -5,6 +5,7 @@
 *.so
 *.dylib
 viberouter
+dist/
 
 # Test binary
 *.test

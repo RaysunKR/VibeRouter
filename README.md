@@ -22,7 +22,7 @@ A Go-based AI model API gateway that proxies and load-balances requests between 
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/viberouter.git
+git clone https://github.com/RaysunKR/viberouter.git
 cd viberouter
 go mod tidy
 go build -o viberouter .

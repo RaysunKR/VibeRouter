@@ -1,24 +1,66 @@
-# VibeRouter 配置示例
-# 复制为 config.yaml 使用
+# =============================================================================
+# VibeRouter 配置示例 / Configuration Example
+# 复制为 config.yaml 使用 / Copy to config.yaml to use
+# =============================================================================
 
+# -----------------------------------------------------------------------------
+# 服务配置 / Server Configuration
+# -----------------------------------------------------------------------------
 server:
+  # 监听地址 / Listen address
+  # 格式: ":端口" 或 "IP:端口" / Format: ":port" or "IP:port"
+  # 示例: ":8080", "127.0.0.1:8080", "0.0.0.0:8080"
   address: :8080
+
+  # 运行模式 / Run mode
+  # debug: 开发模式，输出详细日志 / Development mode with verbose logs
+  # release: 生产模式，精简日志 / Production mode with minimal logs
   mode: release
 
+# -----------------------------------------------------------------------------
+# 日志配置 / Log Configuration
+# -----------------------------------------------------------------------------
 log:
+  # 日志保留天数 / Log retention days
+  # 超过天数的日志文件将被自动删除 / Log files older than this will be auto-deleted
   retention_days: 30
 
+# -----------------------------------------------------------------------------
+# 熔断器配置 / Circuit Breaker Configuration
+# -----------------------------------------------------------------------------
 circuit_breaker:
+  # 熔断阈值 / Failure threshold for circuit to open
+  # 连续失败次数达到此值后触发熔断 / Circuit opens after consecutive failures reach this value
   threshold: 5
+
+  # 熔断恢复时间(秒) / Recovery timeout (seconds)
+  # 熔断后等待此时间再尝试恢复 / Wait this duration before attempting recovery
   timeout_sec: 30
 
+# -----------------------------------------------------------------------------
+# 重试配置 / Retry Configuration
+# -----------------------------------------------------------------------------
 retry:
+  # 最大重试次数 / Maximum retry attempts
+  # 请求失败时自动切换模型重试的次数 / Auto-switch model and retry on failure
   max_attempts: 2
+
+  # 请求超时时间(毫秒) / Request timeout (milliseconds)
   timeout_ms: 30000
 
-# 后端模型配置
+# -----------------------------------------------------------------------------
+# 后端模型配置 / Backend Models Configuration
+# -----------------------------------------------------------------------------
+# 支持多个后端，负载均衡会自动分配 / Supports multiple backends with auto load-balancing
+# provider: openai 或 anthropic / openai or anthropic
+# display_name: 显示名称，用于日志 / Display name for logging
+# technical_name: 实际调用的模型ID / Actual model ID to call
+# base_url: API 基础地址 / API base URL
+# api_key: API 密钥 / API key
+# is_active: 是否启用 / Enable or disable
+# -----------------------------------------------------------------------------
 backend_models:
-  # OpenAI 兼容后端
+  # OpenAI 官方 / OpenAI Official
   - provider: openai
     display_name: GPT-4
     technical_name: gpt-4
@@ -26,7 +68,7 @@ backend_models:
     api_key: sk-your-openai-api-key
     is_active: true
 
-  # Anthropic 兼容后端
+  # Anthropic 官方 / Anthropic Official
   - provider: anthropic
     display_name: Claude-3-Sonnet
     technical_name: claude-3-sonnet-20240229
@@ -34,7 +76,8 @@ backend_models:
     api_key: sk-ant-your-anthropic-api-key
     is_active: true
 
-  # SiliconFlow 等兼容多个Provider的平台
+  # SiliconFlow 等兼容平台示例 / Compatible platforms like SiliconFlow
+  # 一个平台可配置多个模型 / One platform can have multiple models
   - provider: openai
     display_name: GLM-5
     technical_name: Pro/zai-org/GLM-5
@@ -49,8 +92,12 @@ backend_models:
     api_key: your-siliconflow-api-key
     is_active: true
 
-# API密钥配置
-# username 用于日志记录和用户识别
+# -----------------------------------------------------------------------------
+# API 密钥配置 / API Keys Configuration
+# -----------------------------------------------------------------------------
+# 客户端使用这些密钥访问网关 / Clients use these keys to access the gateway
+# username: 用于日志记录和用户识别 / Used for logging and user identification
+# -----------------------------------------------------------------------------
 api_keys:
   - key: sk-your-api-key-1
     username: user1
@@ -58,3 +105,21 @@ api_keys:
   - key: sk-your-api-key-2
     username: user2
     is_active: true
+
+# =============================================================================
+# 使用说明 / Usage Notes
+# =============================================================================
+#
+# 1. 认证方式 / Authentication:
+#    OpenAI 风格 / OpenAI style: Authorization: Bearer sk-your-key
+#    Anthropic 风格 / Anthropic style: x-api-key: sk-your-key
+#
+# 2. 自动模型选择 / Auto Model Selection:
+#    请求中设置 "model": "auto" 自动选择后端
+#    Set "model": "auto" in request for auto backend selection
+#
+# 3. 负载均衡策略 / Load Balancing:
+#    多个相同 provider 的模型会自动负载均衡
+#    Models with same provider are auto load-balanced
+#
+# =============================================================================
