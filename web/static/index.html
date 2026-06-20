@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VibeRouter Admin</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>[v-cloak]{display:none}.sidebar{min-height:100vh}</style>
+</head>
+<body class="bg-gray-100">
+<div id="app" v-cloak>
+
+  <!-- Login -->
+  <div v-if="!user" class="min-h-screen flex items-center justify-center">
+    <div class="bg-white p-8 rounded-lg shadow-md w-96">
+      <h1 class="text-2xl font-bold mb-6 text-center">VibeRouter Admin</h1>
+      <div class="space-y-4">
+        <input v-model="loginForm.username" :placeholder="t.username" @keyup.enter="doLogin" class="w-full border rounded px-3 py-2">
+        <input v-model="loginForm.password" type="password" :placeholder="t.password" @keyup.enter="doLogin" class="w-full border rounded px-3 py-2">
+        <p v-if="loginError" class="text-red-500 text-sm">{{ loginError }}</p>
+        <button @click="doLogin" :disabled="loginLoading" class="w-full bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700 disabled:opacity-50">{{ loginLoading ? '...' : t.login }}</button>
+        <p class="text-xs text-gray-400 text-center">{{ t.defaultHint }}</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div v-else class="flex">
+    <aside class="sidebar w-56 bg-gray-800 text-white flex flex-col">
+      <div class="px-5 py-4 text-lg font-bold border-b border-gray-700">VibeRouter</div>
+      <nav class="flex-1 py-2">
+        <a v-for="tb in tabs" :key="tb.k" @click.prevent="tab=tb.k" :class="['block px-5 py-3 cursor-pointer', tab===tb.k ? 'bg-blue-600' : 'hover:bg-gray-700']">{{ tb.label }}</a>
+      </nav>
+      <div class="px-5 py-3 border-t border-gray-700 text-sm">
+        <div class="text-gray-300 mb-2">{{ user.username }}</div>
+        <button @click="doLogout" class="text-sm text-gray-400 hover:text-white">{{ t.logout }}</button>
+      </div>
+    </aside>
+
+    <main class="flex-1 p-6 overflow-auto">
+      <!-- Models -->
+      <div v-show="tab==='models'">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">{{ t.models }}</h2>
+          <button @click="openCreate" class="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700">{{ t.addModel }}</button>
+        </div>
+        <div class="grid grid-cols-2 gap-6">
+          <div v-for="tier in ['advanced','basic']" :key="tier" class="bg-white rounded-lg shadow p-4">
+            <h3 class="font-semibold mb-3 flex items-center gap-2">{{ tier==='advanced'?t.advanced:t.basic }}
+              <span class="text-xs text-gray-400">({{ modelsByTier(tier).length }})</span></h3>
+            <div class="space-y-2">
+              <div v-for="m in modelsByTier(tier)" :key="m.name" class="border rounded p-3">
+                <div class="flex items-center justify-between">
+                  <div class="font-medium">{{ m.name }} <span v-if="!m.enabled" class="text-xs text-red-500">(disabled)</span></div>
+                  <div class="space-x-2 text-sm">
+                    <button @click="openEdit(m, tier)" class="text-blue-600 hover:underline">{{ t.edit }}</button>
+                    <button @click="deleteModel(m, tier)" class="text-red-600 hover:underline">{{ t.del }}</button>
+                  </div>
+                </div>
+                <div class="text-xs text-gray-500 mt-1">
+                  <span class="px-1.5 py-0.5 bg-gray-100 rounded">{{ m.provider }}</span>
+                  <span class="ml-1">{{ m.technical_name }}</span>
+                  <span class="ml-2">#{{ ' prio' }}{{ m.priority }}</span>
+                  <span v-if="m.long_context" class="ml-1 text-purple-600">long-context {{ m.max_context_tokens>0?('('+m.max_context_tokens+')'):'' }}</span>
+                </div>
+              </div>
+              <p v-if="modelsByTier(tier).length===0" class="text-sm text-gray-400">{{ t.empty }}</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Model form modal -->
+        <div v-if="showForm" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="showForm=false">
+          <div class="bg-white rounded-lg shadow-xl w-[480px] p-6">
+            <h3 class="text-lg font-semibold mb-4">{{ editing ? t.editModel : t.addModel }}</h3>
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <label class="col-span-1">{{ t.tier }}
+                <select v-model="form.tier" class="w-full border rounded px-2 py-1.5 mt-1">
+                  <option value="advanced">{{ t.advanced }}</option><option value="basic">{{ t.basic }}</option>
+                </select>
+              </label>
+              <label class="col-span-1">{{ t.provider }}
+                <select v-model="form.provider" class="w-full border rounded px-2 py-1.5 mt-1">
+                  <option value="openai">openai</option><option value="anthropic">anthropic</option>
+                </select>
+              </label>
+              <label class="col-span-2">{{ t.name }}<input v-model="form.name" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label class="col-span-2">{{ t.technicalName }}<input v-model="form.technical_name" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label class="col-span-2">{{ t.baseUrl }}<input v-model="form.base_url" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label class="col-span-2">{{ t.apiKey }}<input v-model="form.api_key" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label>{{ t.priority }}<input type="number" v-model.number="form.priority" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label>{{ t.maxCtx }}<input type="number" v-model.number="form.max_context_tokens" class="w-full border rounded px-2 py-1.5 mt-1"></label>
+              <label class="col-span-2 flex items-center gap-2 mt-1">
+                <input type="checkbox" v-model="form.long_context"> {{ t.longContext }}
+                <input type="checkbox" v-model="form.enabled" class="ml-4"> {{ t.enabled }}
+              </label>
+            </div>
+            <div v-if="formError" class="text-red-500 text-sm mt-3">{{ formError }}</div>
+            <div class="flex justify-end gap-2 mt-5">
+              <button @click="showForm=false" class="px-4 py-2 border rounded">{{ t.cancel }}</button>
+              <button @click="saveModel" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">{{ t.save }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Routing -->
+      <div v-show="tab==='routing'">
+        <h2 class="text-xl font-semibold mb-4">{{ t.routing }}</h2>
+        <div class="bg-white rounded-lg shadow p-5 max-w-2xl space-y-4 text-sm">
+          <div class="flex items-center gap-3">
+            <label class="w-48">{{ t.defaultTier }}</label>
+            <select v-model="routing.complexity.default_tier" class="border rounded px-2 py-1.5">
+              <option value="basic">{{ t.basic }}</option><option value="advanced">{{ t.advanced }}</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-3">
+            <label class="w-48">{{ t.longCtxThreshold }}</label>
+            <input type="number" v-model.number="routing.long_context_threshold" class="border rounded px-2 py-1.5 w-40">
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-2">
+              <label class="font-medium">{{ t.complexityRules }}</label>
+              <button @click="routing.complexity.rules.push({field:'message_turns',op:'gte',value:8})" class="text-blue-600 text-sm">+ {{ t.addRule }}</button>
+            </div>
+            <div v-for="(r,i) in routing.complexity.rules" :key="i" class="flex items-center gap-2 mb-2">
+              <select v-model="r.field" class="border rounded px-2 py-1.5">
+                <option value="message_turns">message_turns</option>
+                <option value="est_input_tokens">est_input_tokens</option>
+                <option value="prompt_length">prompt_length</option>
+                <option value="has_tools">has_tools</option>
+                <option value="has_code">has_code</option>
+              </select>
+              <select v-model="r.op" class="border rounded px-2 py-1.5">
+                <option value="gte">gte</option><option value="gt">gt</option><option value="eq">eq</option>
+              </select>
+              <input type="number" v-model.number="r.value" class="border rounded px-2 py-1.5 w-28">
+              <button @click="routing.complexity.rules.splice(i,1)" class="text-red-600 text-sm">✕</button>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">{{ t.complexityHint }}</p>
+          </div>
+          <div>
+            <label class="font-medium">{{ t.tierHeader }}</label>
+            <input v-model="routing.override.header" class="w-full border rounded px-2 py-1.5 mt-1">
+          </div>
+          <button @click="saveRouting" class="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700">{{ t.save }}</button>
+          <span v-if="routingSaved" class="text-green-600 text-sm ml-2">{{ t.saved }}</span>
+        </div>
+      </div>
+
+      <!-- API Keys -->
+      <div v-show="tab==='keys'">
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-semibold">{{ t.apiKeys }}</h2>
+          <button @click="openKey()" class="bg-blue-600 text-white rounded px-4 py-2 hover:bg-blue-700">{{ t.addKey }}</button>
+        </div>
+        <div class="bg-white rounded-lg shadow max-w-3xl">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50 text-left">
+              <tr><th class="px-4 py-2">{{ t.apiKey }}</th><th class="px-4 py-2">{{ t.username }}</th><th class="px-4 py-2">{{ t.status }}</th><th class="px-4 py-2"></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="k in keys" :key="k.key" class="border-t">
+                <td class="px-4 py-2 font-mono text-xs">{{ k.key }}</td>
+                <td class="px-4 py-2">{{ k.username }}</td>
+                <td class="px-4 py-2">{{ k.is_active ? t.active : t.inactive }}</td>
+                <td class="px-4 py-2 text-right space-x-2">
+                  <button @click="openKey(k)" class="text-blue-600 hover:underline">{{ t.edit }}</button>
+                  <button @click="deleteKey(k)" class="text-red-600 hover:underline">{{ t.del }}</button>
+                </td>
+              </tr>
+              <tr v-if="keys.length===0"><td colspan="4" class="px-4 py-6 text-center text-gray-400">{{ t.empty }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="showKeyForm" class="fixed inset-0 bg-black/40 flex items-center justify-center z-50" @click.self="showKeyForm=false">
+          <div class="bg-white rounded-lg shadow-xl w-[420px] p-6 text-sm">
+            <h3 class="text-lg font-semibold mb-4">{{ keyForm.old_key ? t.editKey : t.addKey }}</h3>
+            <label>{{ t.apiKey }}<input v-model="keyForm.key" class="w-full border rounded px-2 py-1.5 mt-1 mb-3"></label>
+            <label>{{ t.username }}<input v-model="keyForm.username" class="w-full border rounded px-2 py-1.5 mt-1 mb-3"></label>
+            <label class="flex items-center gap-2 mb-4"><input type="checkbox" v-model="keyForm.is_active"> {{ t.active }}</label>
+            <div class="flex justify-end gap-2">
+              <button @click="showKeyForm=false" class="px-4 py-2 border rounded">{{ t.cancel }}</button>
+              <button @click="saveKey" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">{{ t.save }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div v-show="tab==='logs'">
+        <h2 class="text-xl font-semibold mb-4">{{ t.logs }}</h2>
+        <div class="bg-white rounded-lg shadow p-3 mb-4 flex flex-wrap gap-2 text-sm">
+          <input v-model="logFilter.username" :placeholder="t.username" class="border rounded px-2 py-1.5 w-32">
+          <input v-model="logFilter.model" :placeholder="t.model" class="border rounded px-2 py-1.5 w-40">
+          <select v-model="logFilter.tier" class="border rounded px-2 py-1.5">
+            <option value="">{{ t.allTiers }}</option><option value="advanced">{{ t.advanced }}</option><option value="basic">{{ t.basic }}</option>
+          </select>
+          <select v-model="logFilter.api_style" class="border rounded px-2 py-1.5">
+            <option value="">{{ t.allStyles }}</option><option value="openai">openai</option><option value="anthropic">anthropic</option>
+          </select>
+          <select v-model="logFilter.status" class="border rounded px-2 py-1.5">
+            <option value="">{{ t.allStatus }}</option><option value="2xx">2xx</option><option value="4xx">4xx</option><option value="5xx">5xx</option>
+          </select>
+          <button @click="loadLogs" class="bg-blue-600 text-white rounded px-4 py-1.5">{{ t.search }}</button>
+        </div>
+        <div class="bg-white rounded-lg shadow overflow-auto">
+          <table class="w-full text-xs">
+            <thead class="bg-gray-50 text-left">
+              <tr>
+                <th class="px-3 py-2">{{ t.time }}</th><th class="px-3 py-2">{{ t.username }}</th>
+                <th class="px-3 py-2">{{ t.model }}</th><th class="px-3 py-2">{{ t.tier }}</th>
+                <th class="px-3 py-2">{{ t.style }}</th><th class="px-3 py-2">{{ t.status }}</th>
+                <th class="px-3 py-2">{{ t.latency }}</th><th class="px-3 py-2">{{ t.path }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(l,i) in logs" :key="i" class="border-t">
+                <td class="px-3 py-1.5 whitespace-nowrap">{{ l.timestamp }}</td>
+                <td class="px-3 py-1.5">{{ l.username }}</td>
+                <td class="px-3 py-1.5">{{ l.model_name }}</td>
+                <td class="px-3 py-1.5">{{ l.tier }}<span v-if="l.is_long_context" class="text-purple-600"> *</span></td>
+                <td class="px-3 py-1.5">{{ l.api_style }}</td>
+                <td class="px-3 py-1.5" :class="l.status_code>=500?'text-red-600':(l.status_code>=400?'text-yellow-600':'text-green-600')">{{ l.status_code }}</td>
+                <td class="px-3 py-1.5">{{ l.latency_ms }}ms</td>
+                <td class="px-3 py-1.5 text-gray-500">{{ l.request_path }}</td>
+              </tr>
+              <tr v-if="logs.length===0"><td colspan="8" class="px-3 py-6 text-center text-gray-400">{{ t.empty }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const i18n = {
+  zh: {
+    username:'用户名', password:'密码', login:'登录', logout:'退出', defaultHint:'默认账号 admin / admin',
+    models:'后端模型', routing:'路由规则', apiKeys:'API 密钥', logs:'调用日志',
+    advanced:'高级模型', basic:'普通模型', addModel:'添加模型', edit:'编辑', del:'删除', editModel:'编辑模型',
+    empty:'暂无数据', tier:'分层', provider:'协议', name:'显示名称', technicalName:'技术模型名', baseUrl:'Base URL',
+    apiKey:'API Key', priority:'优先级', longContext:'长上下文', maxCtx:'最大上下文(tokens)', enabled:'启用',
+    cancel:'取消', save:'保存', defaultTier:'默认分层(无法判定时)', longCtxThreshold:'长上下文阈值(tokens)',
+    complexityRules:'复杂度判定规则(满足任一即复杂)', addRule:'添加规则', complexityHint:'满足任一规则即判定为复杂任务，路由到高级模型。',
+    tierHeader:'分层覆盖请求头', saved:'已保存',
+    addKey:'添加密钥', editKey:'编辑密钥', active:'启用', inactive:'停用', status:'状态', style:'风格',
+    time:'时间', model:'模型', latency:'耗时', path:'路径', allTiers:'全部分层', allStyles:'全部风格', allStatus:'全部状态', search:'查询'
+  },
+  en: {
+    username:'Username', password:'Password', login:'Login', logout:'Logout', defaultHint:'Default: admin / admin',
+    models:'Backend Models', routing:'Routing', apiKeys:'API Keys', logs:'Call Logs',
+    advanced:'Advanced', basic:'Basic', addModel:'Add Model', edit:'Edit', del:'Delete', editModel:'Edit Model',
+    empty:'No data', tier:'Tier', provider:'Provider', name:'Display Name', technicalName:'Technical Name', baseUrl:'Base URL',
+    apiKey:'API Key', priority:'Priority', longContext:'Long context', maxCtx:'Max context (tokens)', enabled:'Enabled',
+    cancel:'Cancel', save:'Save', defaultTier:'Default tier (when undecided)', longCtxThreshold:'Long-context threshold (tokens)',
+    complexityRules:'Complexity rules (any match = complex)', addRule:'Add rule', complexityHint:'If any rule matches, the task is routed to advanced models.',
+    tierHeader:'Tier override header', saved:'Saved',
+    addKey:'Add Key', editKey:'Edit Key', active:'Active', inactive:'Inactive', status:'Status', style:'Style',
+    time:'Time', model:'Model', latency:'Latency', path:'Path', allTiers:'All tiers', allStyles:'All styles', allStatus:'All status', search:'Search'
+  }
+};
+
+const { createApp, ref, reactive, computed, onMounted } = Vue;
+
+async function api(method, url, body) {
+  const opt = { method, credentials: 'same-origin' };
+  if (body !== undefined) { opt.headers = {'Content-Type':'application/json'}; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  if (r.status === 401) { location.reload(); throw new Error('unauthorized'); }
+  return r;
+}
+
+createApp({
+  setup() {
+    const lang = (navigator.language || 'en').startsWith('zh') ? 'zh' : 'en';
+    const t = i18n[lang];
+    const tabs = [
+      {k:'models', label:t.models}, {k:'routing', label:t.routing},
+      {k:'keys', label:t.apiKeys}, {k:'logs', label:t.logs}
+    ];
+
+    const user = ref(null);
+    const tab = ref('models');
+    const loginForm = reactive({username:'', password:''});
+    const loginError = ref(''); const loginLoading = ref(false);
+
+    const models = ref([]);
+    const showForm = ref(false); const editing = ref(false); const formError = ref('');
+    const form = reactive(emptyModelForm());
+
+    const routing = reactive({complexity:{default_tier:'basic',rules:[]}, long_context_threshold:32000, override:{header:'X-VibeRouter-Tier'}});
+    const routingSaved = ref(false);
+
+    const keys = ref([]);
+    const showKeyForm = ref(false);
+    const keyForm = reactive({key:'', old_key:'', username:'', is_active:true});
+
+    const logFilter = reactive({username:'',model:'',tier:'',api_style:'',status:''});
+    const logs = ref([]);
+
+    function emptyModelForm(){return {tier:'basic',old_tier:'',old_name:'',name:'',provider:'openai',technical_name:'',base_url:'',api_key:'',priority:1,long_context:false,max_context_tokens:128000,enabled:true};}
+
+    const modelsByTier = (tier) => models.value.filter(m=>m.tier===tier).sort((a,b)=>a.priority-b.priority);
+
+    async function checkSession(){
+      try{ const r = await api('GET','/auth/me'); if(r.ok){ user.value = (await r.json()).username; await loadAll(); } }catch(e){}
+    }
+    async function doLogin(){
+      loginLoading.value=true; loginError.value='';
+      try{
+        const r = await api('POST','/auth/login',{username:loginForm.username,password:loginForm.password});
+        if(r.ok){ user.value=loginForm.username; await loadAll(); }
+        else { loginError.value = (await r.json()).error.message; }
+      }catch(e){ loginError.value=String(e); } finally { loginLoading.value=false; }
+    }
+    async function doLogout(){ await api('POST','/auth/logout'); user.value=null; }
+
+    async function loadAll(){ await Promise.all([loadModels(), loadRouting(), loadKeys()]); }
+    async function loadModels(){ const r=await api('GET','/admin/models'); if(r.ok) models.value=(await r.json()).models||[]; }
+    async function loadRouting(){ const r=await api('GET','/admin/routing'); if(r.ok){ const d=await r.json(); Object.assign(routing, d); } }
+    async function loadKeys(){ const r=await api('GET','/admin/keys'); if(r.ok) keys.value=(await r.json()).keys||[]; }
+
+    function openCreate(){ Object.assign(form, emptyModelForm()); editing.value=false; formError.value=''; showForm.value=true; }
+    function openEdit(m, tier){ Object.assign(form, m, {tier, old_tier:tier, old_name:m.name}); editing.value=true; formError.value=''; showForm.value=true; }
+    async function saveModel(){
+      formError.value='';
+      const r = await api(editing.value?'PUT':'POST','/admin/models', {...form});
+      if(r.ok){ showForm.value=false; await loadModels(); } else { formError.value=(await r.json()).error.message; }
+    }
+    async function deleteModel(m, tier){
+      if(!confirm(`${t.del} ${m.name}?`)) return;
+      const r = await api('DELETE', `/admin/models?tier=${tier}&name=${encodeURIComponent(m.name)}`);
+      if(r.ok) await loadModels();
+    }
+    async function saveRouting(){
+      const r = await api('PUT','/admin/routing', routing);
+      if(r.ok){ routingSaved.value=true; setTimeout(()=>routingSaved.value=false,1500); }
+    }
+
+    function openKey(k){ Object.assign(keyForm, k||{key:'',old_key:'',username:'',is_active:true}); if(k) keyForm.old_key=k.key; showKeyForm.value=true; }
+    async function saveKey(){
+      const r = await api('POST','/admin/keys', keyForm);
+      if(r.ok){ showKeyForm.value=false; await loadKeys(); }
+    }
+    async function deleteKey(k){ if(!confirm(`${t.del} ${k.key}?`)) return; const r=await api('DELETE',`/admin/keys?key=${encodeURIComponent(k.key)}`); if(r.ok) await loadKeys(); }
+
+    async function loadLogs(){
+      const p = new URLSearchParams();
+      for(const k in logFilter){ if(logFilter[k]) p.set(k, logFilter[k]); }
+      const r = await api('GET','/admin/logs?'+p.toString());
+      if(r.ok) logs.value=(await r.json()).logs||[];
+    }
+
+    onMounted(()=>{ checkSession(); });
+
+    return { t, tabs, user, tab, loginForm, loginError, loginLoading, doLogin, doLogout,
+      models, modelsByTier, showForm, editing, formError, form, openCreate, openEdit, saveModel, deleteModel,
+      routing, routingSaved, saveRouting,
+      keys, showKeyForm, keyForm, openKey, saveKey, deleteKey,
+      logFilter, logs, loadLogs };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+viberouter
+viberouter-*
+dist/
+release/
+
+# Test binary / coverage
+*.test
+*.out
+*.prof
+
+# Config files with secrets (keep config.yaml.example only)
+config.yaml
+config.*.yaml
+!config.yaml.example
+
+# Logs
+logs/
+*.log
+*.jsonl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code workspace
+.claude/
+
+# Local-only spec doc (kept in Chinese, not published)
+需求.md
+
+# Dependencies
+vendor/

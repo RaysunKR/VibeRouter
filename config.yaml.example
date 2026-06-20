@@ -1,0 +1,60 @@
+# VibeRouter 配置示例
+# 复制为 config.yaml 使用
+
+server:
+  address: :8080
+  mode: release
+
+log:
+  retention_days: 30
+
+circuit_breaker:
+  threshold: 5
+  timeout_sec: 30
+
+retry:
+  max_attempts: 2
+  timeout_ms: 30000
+
+# 后端模型配置
+backend_models:
+  # OpenAI 兼容后端
+  - provider: openai
+    display_name: GPT-4
+    technical_name: gpt-4
+    base_url: https://api.openai.com/v1
+    api_key: sk-your-openai-api-key
+    is_active: true
+
+  # Anthropic 兼容后端
+  - provider: anthropic
+    display_name: Claude-3-Sonnet
+    technical_name: claude-3-sonnet-20240229
+    base_url: https://api.anthropic.com
+    api_key: sk-ant-your-anthropic-api-key
+    is_active: true
+
+  # SiliconFlow 等兼容多个Provider的平台
+  - provider: openai
+    display_name: GLM-5
+    technical_name: Pro/zai-org/GLM-5
+    base_url: https://api.siliconflow.cn/v1
+    api_key: your-siliconflow-api-key
+    is_active: true
+
+  - provider: anthropic
+    display_name: KIMI
+    technical_name: kimi-k2.5
+    base_url: https://api.siliconflow.cn/v1
+    api_key: your-siliconflow-api-key
+    is_active: true
+
+# API密钥配置
+# username 用于日志记录和用户识别
+api_keys:
+  - key: sk-your-api-key-1
+    username: user1
+    is_active: true
+  - key: sk-your-api-key-2
+    username: user2
+    is_active: true
