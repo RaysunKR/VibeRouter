@@ -1,0 +1,24 @@
+# 二进制与构建产物（锚定仓库根目录，避免误伤 cmd/mockupstream 等源码目录）
+/viberouter
+/viberouter.exe
+/viberouter.exe~
+/viberouter.tmp
+/mockupstream
+/mockupstream.exe
+/dist/
+
+# 运行时数据（含密钥，绝不入库）
+.env
+config.yaml
+config.yaml.tmp
+logs/
+server.out
+
+# 前端
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
+
+# go:embed 的前端构建产物（make frontend 会重新生成；保留 index.html 使干净检出可编译）
+internal/server/web/*
+!internal/server/web/index.html

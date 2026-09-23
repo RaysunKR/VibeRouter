@@ -1,0 +1,57 @@
+# VibeRouter 配置示例。复制为 config.yaml 后按需修改：
+#   cp config.example.yaml config.yaml
+# 说明：
+# - 全部配置也可在管理端（http://<addr>/）维护，修改会热写回 config.yaml，无需重启。
+# - 首次启动若 config.yaml 不存在，会自动生成一份默认配置。
+
+server:
+  addr: :8080            # 监听地址
+  disable_captcha: false # 关闭登录验证码（仅建议测试/受信内网环境使用）
+
+routing:
+  long_context_threshold: 200000  # 估算输入 token 超过该值时，仅路由到 long_context=true 的模型
+  dispatcher_timeout_sec: 5       # 智能分组：调度模型判定复杂度的超时（秒）
+  strategy: round_robin           # 同优先级负载均衡策略：round_robin | random
+
+# 上游供应商（也可在管理端从内置预设一键添加）
+providers: []
+#  - id: deepseek
+#    name: DeepSeek
+#    protocol: chat_completions              # chat_completions | responses | anthropic
+#    base_url: https://api.deepseek.com
+#    api_key: sk-xxxxxxxx                    # 供应商级默认密钥/地址，模型条目可覆盖
+#    balance: { type: deepseek }             # 内置余额探针（可选），支持 deepseek/siliconflow/openrouter 等
+
+# 模型列表。name 是对外暴露的路由名，客户端请求时使用它；
+# 其余字段描述真实上游。api_key/base_url/protocol 留空则继承所属供应商。
+models: []
+#  - name: deepseek-chat
+#    provider: deepseek                      # 引用上面 providers 里的 id
+#    upstream_model: deepseek-chat           # 上游真实模型名
+#    multimodal: false                       # 是否支持图片输入
+#    long_context: false                     # 是否支持超长上下文
+#    max_context_tokens: 65536
+
+# 分组：分组名即对外模型名。
+# - mode: balance  负载均衡：members 按 priority 从小到大故障转移，同优先级按 strategy 分摊
+# - mode: smart    智能调度：调度模型先判复杂度，再进 advanced/basic 子组（子组内规则同 balance）
+groups: []
+#  - name: my-pool
+#    mode: balance
+#    members:
+#      - { model: deepseek-chat, priority: 1 }
+#      - { model: glm-4.7, priority: 2 }
+#  - name: smart-pool
+#    mode: smart
+#    dispatcher_model: deepseek-chat         # 复杂度分类器用的模型；调度失败自动降级 basic 组
+#    advanced:
+#      - { model: kimi-k2, priority: 1 }
+#    basic:
+#      - { model: deepseek-chat, priority: 1 }
+
+# 客户端访问 Key（vr- 前缀）。建议直接在管理端创建，此处仅作备份/迁移用。
+keys: []
+
+logs:
+  file: logs/router.log   # JSON Lines 访问日志，按天切分
+  retention_days: 7       # 保留天数
