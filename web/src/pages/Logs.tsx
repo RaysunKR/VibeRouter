@@ -82,6 +82,8 @@ export default function LogsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <Input
           className="w-36"
+          aria-label={d.logs.statusPlaceholder}
+          data-testid="logs-filter-status"
           placeholder={d.logs.statusPlaceholder}
           value={status}
           onChange={(e) => setStatus(e.target.value)}
@@ -89,6 +91,8 @@ export default function LogsPage() {
         />
         <Input
           className="w-48"
+          aria-label={d.logs.modelPlaceholder}
+          data-testid="logs-filter-model"
           placeholder={d.logs.modelPlaceholder}
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -96,6 +100,8 @@ export default function LogsPage() {
         />
         <Input
           className="w-36"
+          aria-label={d.logs.keyPlaceholder}
+          data-testid="logs-filter-key"
           placeholder={d.logs.keyPlaceholder}
           value={keyName}
           onChange={(e) => setKeyName(e.target.value)}
@@ -105,15 +111,17 @@ export default function LogsPage() {
           className="w-28"
           type="number"
           min={1}
+          aria-label={d.logs.limitPlaceholder}
+          data-testid="logs-filter-limit"
           placeholder={d.logs.limitPlaceholder}
           value={limit}
           onChange={(e) => setLimit(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && load()}
         />
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" data-testid="logs-search" onClick={load} disabled={loading}>
           <Search className="h-4 w-4" /> {d.logs.search}
         </Button>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" data-testid="logs-refresh" onClick={load} disabled={loading}>
           <RefreshCw className={loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} /> {d.common.refresh}
         </Button>
       </div>
@@ -141,6 +149,13 @@ export default function LogsPage() {
                 <Fragment key={i}>
                   <TableRow
                     className={hasError ? 'cursor-pointer' : ''}
+                    data-testid="log-row"
+                    data-log-index={i}
+                    data-log-status={l.status}
+                    data-log-model={l.request_model}
+                    data-log-key={l.key_name}
+                    data-log-group={l.group}
+                    aria-expanded={hasError ? isOpen : undefined}
                     onClick={() => hasError && toggleExpand(i)}
                   >
                     <TableCell className="pr-0">
@@ -188,9 +203,9 @@ export default function LogsPage() {
                     </TableCell>
                   </TableRow>
                   {isOpen && hasError && (
-                    <TableRow>
+                    <TableRow data-testid={`log-error-detail-${i}`}>
                       <TableCell colSpan={9} className="bg-muted/30">
-                        <div className="space-y-1 text-xs">
+                        <div className="space-y-1 text-xs" data-testid="log-error-details">
                           {l.error && (
                             <div>
                               <span className="text-destructive font-medium">{d.logs.error}：</span>

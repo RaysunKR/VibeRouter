@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/base64"
 	"encoding/json"
@@ -14,22 +15,34 @@ import (
 	"github.com/viberouter/viberouter/internal/captcha"
 	"github.com/viberouter/viberouter/internal/config"
 	"github.com/viberouter/viberouter/internal/logger"
+	"github.com/viberouter/viberouter/internal/mcp"
 	"github.com/viberouter/viberouter/internal/router"
+	"github.com/viberouter/viberouter/internal/upstream"
+	"github.com/viberouter/viberouter/internal/webtools"
 )
 
 //go:embed all:web
 var webFS embed.FS
 
+type presetCatalog interface {
+	List(ctx context.Context, force bool) ([]upstream.ProviderPreset, error)
+}
+
 type Server struct {
-	cfg     *config.Store
-	router  *router.Router
-	auth    *auth.Manager
-	log     *logger.FileLogger
-	captcha *captcha.Store
+	cfg      *config.Store
+	router   *router.Router
+	auth     *auth.Manager
+	log      *logger.FileLogger
+	captcha  *captcha.Store
+	presets  presetCatalog
+	webTools *webtools.Service
 }
 
 func New(cfg *config.Store, rt *router.Router, am *auth.Manager, fl *logger.FileLogger) *Server {
-	return &Server{cfg: cfg, router: rt, auth: am, log: fl, captcha: captcha.NewStore()}
+	return &Server{
+		cfg: cfg, router: rt, auth: am, log: fl, captcha: captcha.NewStore(),
+		presets: upstream.NewPresetCatalog(), webTools: webtools.New(cfg),
+	}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -40,14 +53,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/responses", s.handleProxy)
 	mux.HandleFunc("POST /v1/messages", s.handleProxy)
 	mux.HandleFunc("GET /v1/models", s.handleListModels)
+	mux.Handle("/mcp", s.clientKey(mcp.NewHandler(s.cfg, s.webTools)))
 
 	// admin API
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("GET /api/captcha", s.handleCaptcha)
 	mux.Handle("GET /api/config", s.admin(http.HandlerFunc(s.handleGetConfig)))
 	mux.Handle("GET /api/presets", s.admin(http.HandlerFunc(s.handlePresets)))
+	mux.Handle("POST /api/presets/refresh", s.admin(http.HandlerFunc(s.handlePresetsRefresh)))
 	mux.Handle("POST /api/providers", s.admin(http.HandlerFunc(s.handleProviderCreate)))
 	mux.Handle("PUT /api/providers/{id}", s.admin(http.HandlerFunc(s.handleProviderUpdate)))
+	mux.Handle("POST /api/providers/{id}/sync-preset", s.admin(http.HandlerFunc(s.handleProviderSyncPreset)))
 	mux.Handle("DELETE /api/providers/{id}", s.admin(http.HandlerFunc(s.handleProviderDelete)))
 	mux.Handle("POST /api/providers/{id}/balance", s.admin(http.HandlerFunc(s.handleBalance)))
 	mux.Handle("POST /api/models", s.admin(http.HandlerFunc(s.handleModelCreate)))
@@ -80,6 +96,16 @@ func (s *Server) admin(h http.Handler) http.Handler {
 			return
 		}
 		h.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) clientKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.authorizeKey(extractKey(r)); !ok {
+			writeError(w, http.StatusUnauthorized, "invalid api key")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

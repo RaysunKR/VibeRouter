@@ -26,6 +26,7 @@ VibeRouter is written in Go and exposes a single adaptive API endpoint — no ma
 - [Configuration reference (config.yaml)](#configuration-reference-configyaml)
 - [Admin UI guide](#admin-ui-guide)
 - [Client integration examples](#client-integration-examples)
+- [Web search, fetch, and MCP](#web-search-fetch-and-mcp)
 - [Routing behavior in depth](#routing-behavior-in-depth)
 - [Logging](#logging)
 - [Balance / quota queries](#balance--quota-queries)
@@ -49,7 +50,7 @@ VibeRouter is written in Go and exposes a single adaptive API endpoint — no ma
 | Access logging | JSON Lines files rotated daily, 7-day retention by default (configurable); filterable by key / model / status code / time in the admin UI |
 | Admin UI | shadcn/ui-based interface in Chinese and English (follows the browser language, manually switchable with the choice remembered), embedded in and served by the Go binary |
 
-25 provider presets ship built-in (DeepSeek, Zhipu, MiniMax, Kimi, SiliconFlow, OpenRouter, Volcano Ark, Alibaba Bailian, ModelScope, PPIO, etc., sourced from cc-switch), pre-fillable with one click in the admin UI.
+26 provider presets ship built-in (DeepSeek, Zhipu, MiniMax, Kimi, SiliconFlow, OpenRouter, Volcano Ark, Alibaba Bailian, ModelScope, PPIO, etc., sourced from cc-switch), pre-fillable with one click in the admin UI. The catalog also retrieves current providers from [models.dev](https://models.dev/api.json) and caches them for one hour. Use **Sync models.dev** to refresh immediately; if the network is unavailable, the catalog falls back to the latest cache or the built-in presets.
 
 ---
 
@@ -297,6 +298,21 @@ logs:
   retention_days: 7                # days to keep logs, default 7
 ```
 
+Multiple account instances can be created from the same preset. Instance IDs must be unique; duplicate instances with the same protocol, URL, and key are rejected. Names are customizable, `preset_id` records the preset source, models reference an instance ID through `provider`, and groups continue to reference model names:
+
+```yaml
+providers:
+  - {id: deepseek-prod, name: DeepSeek Production, protocol: chat_completions, base_url: https://api.deepseek.com, api_key: sk-prod, preset_id: deepseek}
+  - {id: deepseek-backup, name: DeepSeek Backup, protocol: chat_completions, base_url: https://api.deepseek.com, api_key: sk-backup, preset_id: deepseek}
+models:
+  - {name: ds-prod, provider: deepseek-prod, upstream_model: deepseek-v4-flash}
+  - {name: ds-backup, provider: deepseek-backup, upstream_model: deepseek-v4-flash}
+```
+
+Selecting the same preset again in the admin UI automatically suggests an available instance ID such as `deepseek-2`. Model and group selectors display the custom name and instance ID. Existing instances can be linked, relinked, or unlinked in the edit dialog.
+
+A linked instance offers **Update from preset** in its actions. This force-fetches models.dev, updates the instance protocol/base URL, and updates existing models matched by `provider + upstream_model` with multimodal, context-limit, and long-context metadata. Keys, names, instance IDs, route names, upstream model IDs, model overrides, and group references stay unchanged. Unmatched models and missing metadata keep their existing values. `long_context` is derived by comparing the context limit with the global long-context threshold at sync time.
+
 `.env` (admin credentials — never commit this file):
 
 ```ini
@@ -311,7 +327,8 @@ ADMIN_SESSION_SECRET=<random hex; old sessions are invalidated when it changes>
 
 | Page | Features |
 |---|---|
-| Providers | One-click preset pre-fill; edit/delete; **Check balance** button (cash balance or quota percentage) |
+| Providers | Built-in and models.dev presets; multiple account instances; preset binding; update an instance and its existing models from the latest preset; edit/delete; **Check balance** |
+| Web tools | Bocha/Kimi/DeepSeek/GLM search and fetch; native Responses/Anthropic bridge; unified MCP; keys, timeout, and call limits |
 | Models | Full-field CRUD; multimodal / long-context toggle badges |
 | Group routing | Balance groups: members + priorities; smart groups: dispatcher model, **editable dispatcher prompt** (with a restore-default button), advanced/basic sub-groups |
 | Keys | Create (`vr-` prefix auto-generated), copy, rename, enable/disable, delete |
@@ -356,15 +373,64 @@ X-VibeRouter-Tier: advanced    # or basic
 
 ---
 
+## Web search, fetch, and MCP
+
+The **Web tools** admin page configures the four official provider APIs and independently enables the Responses/Anthropic bridge and MCP. Everything is disabled by default, and search and fetch providers can be selected independently.
+
+| Provider | Web search | Web fetch |
+|---|---|---|
+| Bocha | `POST /v1/web-search` | No standalone fetch API |
+| Kimi | `/v1/tools/search` | `/v1/tools/fetch` |
+| DeepSeek | `/v1/tools/search` | `/v1/tools/fetch` |
+| GLM | `/api/paas/v4/web_search` | `/api/paas/v4/reader` |
+
+**Responses API**: declare `web_search`. VibeRouter also accepts a `web_fetch` extension and returns fetch records as `web_search_call.action.open_page`.
+
+```python
+r = client.responses.create(
+    model="auto", input="Search for current news and summarize the sources",
+    tools=[{"type": "web_search"}, {"type": "web_fetch"}],
+)
+print(r.output_text)
+```
+
+**Anthropic Messages**: use standard versioned server-tool declarations, including `max_uses` and allowed/blocked domains.
+
+```python
+r = client.messages.create(
+    model="auto", max_tokens=2048,
+    messages=[{"role": "user", "content": "Search and read https://example.com/article"}],
+    tools=[
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+        {"type": "web_fetch_20250910", "name": "web_fetch"},
+    ],
+)
+```
+
+With the bridge enabled, VibeRouter runs a bounded loop: the model calls a tool, the configured provider searches/fetches, the structured result is returned to the model, and the model produces the final answer. Clients receive native `web_search_call` or `server_tool_use`/result blocks. Streaming requests are buffered during the tool loop and then emitted as standard SSE. `max_calls` bounds total web calls per request.
+
+**Unified MCP**: when enabled, use `http://<host>:8080/mcp` with standard Streamable HTTP and `Authorization: Bearer vr-xxxx`. The MCP switch is independent of the API bridge.
+
+```json
+{
+  "url": "http://<host>:8080/mcp",
+  "headers": {"Authorization": "Bearer vr-xxxx"}
+}
+```
+
+MCP exposes fixed `web_search` and `web_fetch` tools, subject to provider configuration. Results include both serialized JSON text and `structuredContent`. Search returns `{provider, query, results:[{title,url,snippet,content,site_name,published_at}]}`; fetch returns `{provider,url,title,content,format}`. The server is stateless and does not require a client session ID.
+
+---
+
 ## Routing behavior in depth
 
 **Decision order** (common to all three modes):
 
 1. Model name resolution: match a model first, then a group
 2. Modality filter: request contains images → only models with `multimodal: true`
-3. Context filter: estimated tokens (text ≈ chars/4, images counted as 1000) above the threshold → only models with `long_context: true`
-4. Smart groups add: the dispatcher model classifies complexity into a tier; if the chosen tier has no capability match, **auto-escalate to the advanced tier**
-5. Within the group, members are sorted by priority; same priority is round-robin/random per strategy
+3. Context filter: estimated tokens (text ≈ chars/4, images counted as 1000) above the threshold → only models with `long_context: true`; models whose `max_context_tokens` is below the estimated input are also excluded
+4. Smart groups first check both tiers for usable candidates. If only one tier is usable, select it without calling the dispatcher; otherwise, classify complexity. If the basic tier has no capability match, **auto-escalate to the advanced tier**
+5. Within the group, members are sorted by priority; same priority is round-robin/random per strategy. Smart tiers maintain independent round-robin state
 
 **Failover triggers** (transparent to the client; the next candidate is tried automatically):
 
@@ -375,7 +441,8 @@ X-VibeRouter-Tier: advanced    # or basic
 
 **Smart dispatching details**:
 
-- Only the text of the last user message (truncated to 4000 chars) is sent to the dispatcher — no history, no images, `temperature=0`
+- Only the text of the last user message (safely truncated to the first 4000 Unicode characters) is sent to the dispatcher — no history, no images, `temperature=0`
+- Dispatcher output is parsed from the JSON `tier` field, with support for common Markdown JSON code blocks; explanatory text and malformed output are not accepted as classifications
 - Dispatcher timeout is 5s (configurable); failure/unparseable output → **degrade to the basic tier**, with the reason logged
 - Pick a cheap, fast dispatcher model; reasoning models (e.g. deepseek-v4) also work (a sufficient token budget is reserved internally)
 
@@ -445,13 +512,18 @@ A: Delete the `ADMIN_PASSWORD_HASH` line in `.env` and restart → admin/admin i
 ```bash
 go vet ./... && go test ./...                 # unit + integration tests (protocol conversion / routing matrix / admin flows)
 
-# Mock upstreams for all three protocols + official-SDK compatibility suite (39 cases)
-go build -o mockupstream ./cmd/mockupstream
+# Full acceptance: real backend + embedded UI + official SDKs + web tools + MCP + Playwright
+make e2e
+
+# Run the backend or browser suite separately
 python tests/e2e/run_tests.py ./viberouter ./mockupstream
+cd web && corepack pnpm exec playwright test
 
 # Linux two-host cross-network acceptance (requires host and credential setup)
 python tests/e2e/deploy_linux.py
 ```
+
+The full suite uses local mocks and isolated temporary configuration. It never reads the real `.env` and does not require public network access. Use `VR_ROUTER_PORT`, `VR_MOCK_PORT`, and `VR_UI_PORT` to avoid port conflicts. Playwright failure screenshots and traces are stored in `web/test-results/`.
 
 ## License
 

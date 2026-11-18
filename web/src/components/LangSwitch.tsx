@@ -10,6 +10,8 @@ export default function LangSwitch() {
       variant="ghost"
       size="sm"
       className="justify-start gap-3"
+      aria-label="Switch language"
+      data-testid="language-switch"
       onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
     >
       <Languages className="h-4 w-4" />

@@ -79,7 +79,7 @@ export default function SettingsPage() {
           <Button variant="outline" size="sm" onClick={load}>
             <RefreshCw className="h-4 w-4" /> {d.common.refresh}
           </Button>
-          <Button size="sm" onClick={save} disabled={saving}>
+          <Button size="sm" data-testid="settings-save" onClick={save} disabled={saving}>
             <Save className="h-4 w-4" /> {d.common.save}
           </Button>
         </div>
@@ -92,8 +92,10 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <Label>{d.settings.threshold}</Label>
+            <Label htmlFor="settings-threshold">{d.settings.threshold}</Label>
             <Input
+              id="settings-threshold"
+              data-testid="settings-threshold"
               type="number"
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
@@ -101,17 +103,19 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">{d.settings.thresholdHint}</p>
           </div>
           <div className="space-y-1.5">
-            <Label>{d.settings.dispatcherTimeout}</Label>
+            <Label htmlFor="settings-dispatcher-timeout">{d.settings.dispatcherTimeout}</Label>
             <Input
+              id="settings-dispatcher-timeout"
+              data-testid="settings-dispatcher-timeout"
               type="number"
               value={timeoutSec}
               onChange={(e) => setTimeoutSec(e.target.value)}
             />
           </div>
           <div className="space-y-1.5">
-            <Label>{d.settings.strategy}</Label>
+            <Label htmlFor="settings-strategy">{d.settings.strategy}</Label>
             <Select value={strategy} onValueChange={setStrategy}>
-              <SelectTrigger>
+              <SelectTrigger id="settings-strategy" data-testid="settings-strategy">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -130,8 +134,10 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5">
-            <Label>{d.settings.retentionDays}</Label>
+            <Label htmlFor="settings-retention-days">{d.settings.retentionDays}</Label>
             <Input
+              id="settings-retention-days"
+              data-testid="settings-retention-days"
               type="number"
               min={1}
               value={retentionDays}
@@ -140,8 +146,13 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">{d.settings.retentionDefault}</p>
           </div>
           <div className="space-y-1.5">
-            <Label>{d.settings.logFile}</Label>
-            <Input value={logFile} onChange={(e) => setLogFile(e.target.value)} />
+            <Label htmlFor="settings-log-file">{d.settings.logFile}</Label>
+            <Input
+              id="settings-log-file"
+              data-testid="settings-log-file"
+              value={logFile}
+              onChange={(e) => setLogFile(e.target.value)}
+            />
             <p className="text-xs text-muted-foreground">{d.settings.logFileHint}</p>
           </div>
         </CardContent>

@@ -64,17 +64,26 @@ type ToolChoice struct {
 	Tool string `json:"tool,omitempty"`
 }
 
+type HostedTool struct {
+	Kind           string   `json:"kind"` // web_search | web_fetch
+	MaxUses        int      `json:"max_uses,omitempty"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+}
+
 type CanonicalRequest struct {
-	Model       string      `json:"model"`
-	Messages    []Message   `json:"messages"`
-	System      string      `json:"system,omitempty"`
-	Tools       []Tool      `json:"tools,omitempty"`
-	ToolChoice  *ToolChoice `json:"tool_choice,omitempty"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Temperature *float64    `json:"temperature,omitempty"`
-	TopP        *float64    `json:"top_p,omitempty"`
-	Stop        []string    `json:"stop,omitempty"`
-	Stream      bool        `json:"stream,omitempty"`
+	Model         string       `json:"model"`
+	Messages      []Message    `json:"messages"`
+	System        string       `json:"system,omitempty"`
+	Tools         []Tool       `json:"tools,omitempty"`
+	HostedTools   []HostedTool `json:"hosted_tools,omitempty"`
+	HostedHistory bool         `json:"hosted_history,omitempty"`
+	ToolChoice    *ToolChoice  `json:"tool_choice,omitempty"`
+	MaxTokens     int          `json:"max_tokens,omitempty"`
+	Temperature   *float64     `json:"temperature,omitempty"`
+	TopP          *float64     `json:"top_p,omitempty"`
+	Stop          []string     `json:"stop,omitempty"`
+	Stream        bool         `json:"stream,omitempty"`
 }
 
 // HasMultimodal reports whether any message contains a non-text part.
@@ -113,22 +122,22 @@ type Usage struct {
 }
 
 type CanonicalResponse struct {
-	ID           string   `json:"id"`
-	Model        string   `json:"model"`
-	Parts        []Part   `json:"parts"` // assistant message parts (text / tool_call)
-	FinishReason string   `json:"finish_reason"` // stop | length | tool_calls
-	Usage        Usage    `json:"usage"`
+	ID           string `json:"id"`
+	Model        string `json:"model"`
+	Parts        []Part `json:"parts"`         // assistant message parts (text / tool_call)
+	FinishReason string `json:"finish_reason"` // stop | length | tool_calls
+	Usage        Usage  `json:"usage"`
 }
 
 // --- streaming ---
 
 // Stream event types.
 const (
-	EvTextDelta      = "text_delta"
-	EvToolCallStart  = "tool_call_start"
-	EvToolArgsDelta  = "tool_args_delta"
-	EvDone           = "done"
-	EvError          = "error"
+	EvTextDelta     = "text_delta"
+	EvToolCallStart = "tool_call_start"
+	EvToolArgsDelta = "tool_args_delta"
+	EvDone          = "done"
+	EvError         = "error"
 )
 
 type StreamEvent struct {

@@ -23,18 +23,25 @@ type responsesItem struct {
 	Arguments string `json:"arguments,omitempty"`
 	// function_call_output
 	Output json.RawMessage `json:"output,omitempty"`
+	// hosted web history
+	Action  json.RawMessage `json:"action,omitempty"`
+	Sources []struct {
+		Type  string `json:"type,omitempty"`
+		URL   string `json:"url,omitempty"`
+		Title string `json:"title,omitempty"`
+	} `json:"sources,omitempty"`
 }
 
 type responsesRequest struct {
-	Model          string             `json:"model"`
-	Input          json.RawMessage    `json:"input"` // string or []item
-	Instructions   string             `json:"instructions,omitempty"`
-	Tools          []json.RawMessage  `json:"tools,omitempty"`
-	ToolChoice     json.RawMessage    `json:"tool_choice,omitempty"`
+	Model           string            `json:"model"`
+	Input           json.RawMessage   `json:"input"` // string or []item
+	Instructions    string            `json:"instructions,omitempty"`
+	Tools           []json.RawMessage `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage   `json:"tool_choice,omitempty"`
 	MaxOutputTokens int               `json:"max_output_tokens,omitempty"`
-	Temperature    *float64           `json:"temperature,omitempty"`
-	TopP           *float64           `json:"top_p,omitempty"`
-	Stream         bool               `json:"stream,omitempty"`
+	Temperature     *float64          `json:"temperature,omitempty"`
+	TopP            *float64          `json:"top_p,omitempty"`
+	Stream          bool              `json:"stream,omitempty"`
 }
 
 func ParseResponsesRequest(body []byte) (*CanonicalRequest, error) {
@@ -63,19 +70,42 @@ func ParseResponsesRequest(body []byte) (*CanonicalRequest, error) {
 				return nil, fmt.Errorf("invalid responses input: %w", err)
 			}
 			for _, it := range items {
+				if it.Type == "web_search_call" {
+					out.HostedHistory = true
+				}
 				out.Messages = append(out.Messages, responsesItemToCanonical(it))
 			}
 		}
 	}
 	for _, t := range rr.Tools {
-		var fn struct {
-			Type        string          `json:"type"`
-			Name        string          `json:"name"`
-			Description string          `json:"description"`
-			Parameters  json.RawMessage `json:"parameters"`
+		var tool struct {
+			Type           string          `json:"type"`
+			Name           string          `json:"name"`
+			Description    string          `json:"description"`
+			Parameters     json.RawMessage `json:"parameters"`
+			MaxUses        int             `json:"max_uses"`
+			AllowedDomains []string        `json:"allowed_domains"`
+			BlockedDomains []string        `json:"blocked_domains"`
+			Filters        *struct {
+				AllowedDomains []string `json:"allowed_domains"`
+				BlockedDomains []string `json:"blocked_domains"`
+			} `json:"filters"`
 		}
-		if json.Unmarshal(t, &fn) == nil && fn.Type == "function" && fn.Name != "" {
-			out.Tools = append(out.Tools, Tool{Name: fn.Name, Description: fn.Description, InputSchema: fn.Parameters})
+		if json.Unmarshal(t, &tool) != nil {
+			continue
+		}
+		if kind := HostedWebToolKind(tool.Type); kind != "" {
+			allowed, blocked := tool.AllowedDomains, tool.BlockedDomains
+			if tool.Filters != nil {
+				allowed, blocked = tool.Filters.AllowedDomains, tool.Filters.BlockedDomains
+			}
+			out.HostedTools = append(out.HostedTools, HostedTool{
+				Kind: kind, MaxUses: tool.MaxUses, AllowedDomains: allowed, BlockedDomains: blocked,
+			})
+			continue
+		}
+		if tool.Type == "function" && tool.Name != "" {
+			out.Tools = append(out.Tools, Tool{Name: tool.Name, Description: tool.Description, InputSchema: tool.Parameters})
 		}
 	}
 	if len(rr.ToolChoice) > 0 {
@@ -86,6 +116,13 @@ func ParseResponsesRequest(body []byte) (*CanonicalRequest, error) {
 
 func responsesItemToCanonical(it responsesItem) Message {
 	switch it.Type {
+	case "web_search_call":
+		action := it.Action
+		if len(action) == 0 {
+			action = json.RawMessage(`{}`)
+		}
+		payload, _ := json.Marshal(map[string]any{"action": action, "sources": it.Sources})
+		return Message{Role: "assistant", Parts: []Part{{Type: PartText, Text: "Previous hosted web search:\n" + string(payload)}}}
 	case "function_call":
 		return Message{Role: "assistant", Parts: []Part{{
 			Type:       PartToolCall,

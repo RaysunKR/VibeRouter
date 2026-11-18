@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,8 +10,8 @@ import (
 // ---------- Anthropic Messages: request parsing ----------
 
 type anthropicBlock struct {
-	Type string          `json:"type"`
-	Text string          `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 	// image
 	Source *struct {
 		Type      string `json:"type"` // base64 | url
@@ -28,17 +29,21 @@ type anthropicBlock struct {
 }
 
 type anthropicRequest struct {
-	Model         string            `json:"model"`
-	MaxTokens     int               `json:"max_tokens"`
-	System        json.RawMessage   `json:"system,omitempty"` // string or blocks
-	Messages      []struct {
+	Model     string          `json:"model"`
+	MaxTokens int             `json:"max_tokens"`
+	System    json.RawMessage `json:"system,omitempty"` // string or blocks
+	Messages  []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"` // string or blocks
 	} `json:"messages"`
 	Tools []struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description,omitempty"`
-		InputSchema json.RawMessage `json:"input_schema"`
+		Type           string          `json:"type,omitempty"`
+		Name           string          `json:"name"`
+		Description    string          `json:"description,omitempty"`
+		InputSchema    json.RawMessage `json:"input_schema"`
+		MaxUses        int             `json:"max_uses,omitempty"`
+		AllowedDomains []string        `json:"allowed_domains,omitempty"`
+		BlockedDomains []string        `json:"blocked_domains,omitempty"`
 	} `json:"tools,omitempty"`
 	ToolChoice *struct {
 		Type string `json:"type"`
@@ -65,6 +70,16 @@ func ParseAnthropicRequest(body []byte) (*CanonicalRequest, error) {
 	}
 	out.System = anthropicSystemText(ar.System)
 	for _, m := range ar.Messages {
+		var blocks []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(m.Content, &blocks) == nil {
+			for _, block := range blocks {
+				if block.Type == "server_tool_use" || block.Type == "web_search_tool_result" || block.Type == "web_fetch_tool_result" {
+					out.HostedHistory = true
+				}
+			}
+		}
 		cm, err := anthropicMessageToCanonical(m.Role, m.Content)
 		if err != nil {
 			return nil, err
@@ -72,6 +87,12 @@ func ParseAnthropicRequest(body []byte) (*CanonicalRequest, error) {
 		out.Messages = append(out.Messages, cm)
 	}
 	for _, t := range ar.Tools {
+		if kind := HostedWebToolKind(t.Type); kind != "" {
+			out.HostedTools = append(out.HostedTools, HostedTool{
+				Kind: kind, MaxUses: t.MaxUses, AllowedDomains: t.AllowedDomains, BlockedDomains: t.BlockedDomains,
+			})
+			continue
+		}
 		out.Tools = append(out.Tools, Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
 	if ar.ToolChoice != nil {
@@ -139,9 +160,63 @@ func anthropicMessageToCanonical(role string, content json.RawMessage) (Message,
 		case "tool_result":
 			cm.Parts = append(cm.Parts, Part{Type: PartToolResult, ToolResultID: bl.ToolUseID,
 				ToolResultContent: anthropicToolResultText(bl.Content)})
+		case "server_tool_use":
+			cm.Parts = append(cm.Parts, Part{Type: PartText, Text: "Previous hosted tool " + bl.Name + " input: " + string(bl.Input)})
+		case "web_search_tool_result":
+			if text := anthropicSearchHistory(bl.Content); text != "" {
+				cm.Parts = append(cm.Parts, Part{Type: PartText, Text: text})
+			}
+		case "web_fetch_tool_result":
+			if text := anthropicFetchHistory(bl.Content); text != "" {
+				cm.Parts = append(cm.Parts, Part{Type: PartText, Text: text})
+			}
 		}
 	}
 	return cm, nil
+}
+
+func anthropicSearchHistory(raw json.RawMessage) string {
+	var results []struct {
+		URL              string `json:"url"`
+		Title            string `json:"title"`
+		PageAge          string `json:"page_age"`
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(raw, &results); err != nil {
+		return "Previous web search tool result:\n" + string(raw)
+	}
+	var out strings.Builder
+	for _, result := range results {
+		item := map[string]any{"url": result.URL, "title": result.Title, "page_age": result.PageAge}
+		if strings.HasPrefix(result.EncryptedContent, "viberouter:") {
+			encoded := strings.TrimPrefix(result.EncryptedContent, "viberouter:")
+			if decoded, err := base64.RawURLEncoding.DecodeString(encoded); err == nil {
+				item["content"] = string(decoded)
+			}
+		}
+		payload, _ := json.Marshal(item)
+		out.WriteString("Previous web search result:\n" + string(payload) + "\n")
+	}
+	return out.String()
+}
+
+func anthropicFetchHistory(raw json.RawMessage) string {
+	var result struct {
+		URL     string `json:"url"`
+		Content struct {
+			Title  string `json:"title"`
+			Source struct {
+				Data string `json:"data"`
+			} `json:"source"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "Previous web fetch tool result:\n" + string(raw)
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"url": result.URL, "title": result.Content.Title, "content": result.Content.Source.Data,
+	})
+	return "Previous web fetch result:\n" + string(payload)
 }
 
 func anthropicToolResultText(raw json.RawMessage) string {

@@ -45,6 +45,28 @@ groups:
       - {model: m-chat, priority: 1}
     basic:
       - {model: m-anth, priority: 1}
+  - name: smart-basic-only
+    mode: smart
+    dispatcher_model: m-broke
+    advanced: []
+    basic:
+      - {model: m-anth, priority: 1}
+  - name: smart-vision
+    mode: smart
+    dispatcher_model: m-broke
+    advanced:
+      - {model: m-chat, priority: 1}
+    basic:
+      - {model: m-broke, priority: 1}
+web_tools:
+  enabled: true
+  mcp_enabled: true
+  search_provider: deepseek
+  fetch_provider: deepseek
+  timeout_sec: 5
+  max_calls: 4
+  providers:
+    - {id: deepseek, enabled: true, api_key: web-key, base_url: "http://MOCKHOST:19322"}
 keys:
   - {id: k1, key: vr-e2ekey, name: e2e, enabled: true, created_at: "2026-08-15T00:00:00Z"}
 logs: {file: "logs/e2e.log"}
@@ -97,8 +119,9 @@ def main():
         sftp.close()
 
         # (setsid ... &) 双层脱离：后台进程不得持有 SSH 通道管道，否则 exec 通道永不关闭
-        run(cm, f"cd {REMOTE_DIR} && (setsid nohup ./mockupstream -port 19322 > mock.log 2>&1 < /dev/null &); sleep 1; pgrep -f mockupstream")
-        run(cr, f"cd {REMOTE_DIR} && (setsid nohup ./viberouter -config config.yaml -env .env > router.log 2>&1 < /dev/null &); sleep 1; pgrep -f 'viberouter -config'")
+        models_dev_url = f"http://{HOST_MOCK}:19322/api.json"
+        run(cm, f"cd {REMOTE_DIR} && (setsid nohup env VR_MODELS_DEV_URL={models_dev_url} ./mockupstream -port 19322 > mock.log 2>&1 < /dev/null &); sleep 1; pgrep -f mockupstream")
+        run(cr, f"cd {REMOTE_DIR} && (setsid nohup env VR_MODELS_DEV_URL={models_dev_url} ./viberouter -config config.yaml -env .env > router.log 2>&1 < /dev/null &); sleep 1; pgrep -f 'viberouter -config'")
         time.sleep(1)
 
         _, out, _ = run(cm, f"cat {REMOTE_DIR}/mock.log")

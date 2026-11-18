@@ -48,6 +48,23 @@ type RoutingConfig struct {
 	Strategy string `yaml:"strategy" json:"strategy"`
 }
 
+type WebToolProviderConfig struct {
+	ID      string `yaml:"id" json:"id"`
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	APIKey  string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+}
+
+type WebToolsConfig struct {
+	Enabled        bool                    `yaml:"enabled" json:"enabled"`
+	MCPEnabled     bool                    `yaml:"mcp_enabled" json:"mcp_enabled"`
+	SearchProvider string                  `yaml:"search_provider" json:"search_provider"`
+	FetchProvider  string                  `yaml:"fetch_provider" json:"fetch_provider"`
+	TimeoutSec     int                     `yaml:"timeout_sec" json:"timeout_sec"`
+	MaxCalls       int                     `yaml:"max_calls" json:"max_calls"`
+	Providers      []WebToolProviderConfig `yaml:"providers" json:"providers"`
+}
+
 // BalanceConfig describes how to query a provider's remaining balance/quota.
 // Type selects a built-in probe implementation (see internal/upstream/balance.go).
 type BalanceConfig struct {
@@ -62,6 +79,7 @@ type Provider struct {
 	Protocol string        `yaml:"protocol" json:"protocol"`
 	BaseURL  string        `yaml:"base_url" json:"base_url"`
 	APIKey   string        `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	PresetID string        `yaml:"preset_id,omitempty" json:"preset_id,omitempty"`
 	Balance  BalanceConfig `yaml:"balance,omitempty" json:"balance,omitempty"`
 }
 
@@ -69,7 +87,7 @@ type Model struct {
 	Name         string `yaml:"name" json:"name"` // router-facing alias used by clients
 	Provider     string `yaml:"provider" json:"provider"`
 	UpstreamName string `yaml:"upstream_model" json:"upstream_model"`
-	APIKey       string `yaml:"api_key,omitempty" json:"api_key,omitempty"`  // overrides provider key
+	APIKey       string `yaml:"api_key,omitempty" json:"api_key,omitempty"`   // overrides provider key
 	BaseURL      string `yaml:"base_url,omitempty" json:"base_url,omitempty"` // overrides provider URL
 	Protocol     string `yaml:"protocol,omitempty" json:"protocol,omitempty"` // overrides provider protocol
 	Multimodal   bool   `yaml:"multimodal" json:"multimodal"`
@@ -114,13 +132,14 @@ type LogConfig struct {
 // Config is pure data — the contents of config.yaml. All concurrent access
 // goes through Store.
 type Config struct {
-	Server    ServerConfig  `yaml:"server" json:"server"`
-	Routing   RoutingConfig `yaml:"routing" json:"routing"`
-	Providers []Provider    `yaml:"providers" json:"providers"`
-	Models    []Model       `yaml:"models" json:"models"`
-	Groups    []Group       `yaml:"groups" json:"groups"`
-	Keys      []APIKey      `yaml:"keys" json:"keys"`
-	Logs      LogConfig     `yaml:"logs" json:"logs"`
+	Server    ServerConfig   `yaml:"server" json:"server"`
+	Routing   RoutingConfig  `yaml:"routing" json:"routing"`
+	Providers []Provider     `yaml:"providers" json:"providers"`
+	Models    []Model        `yaml:"models" json:"models"`
+	Groups    []Group        `yaml:"groups" json:"groups"`
+	Keys      []APIKey       `yaml:"keys" json:"keys"`
+	Logs      LogConfig      `yaml:"logs" json:"logs"`
+	WebTools  WebToolsConfig `yaml:"web_tools" json:"web_tools"`
 }
 
 // Store owns the Config, its file path, and the lock guarding mutations.
@@ -139,6 +158,18 @@ func defaultConfig() Config {
 			Strategy:             "round_robin",
 		},
 		Logs: LogConfig{File: "logs/router.log", RetentionDays: 7},
+		WebTools: WebToolsConfig{
+			SearchProvider: "deepseek",
+			FetchProvider:  "deepseek",
+			TimeoutSec:     30,
+			MaxCalls:       8,
+			Providers: []WebToolProviderConfig{
+				{ID: "bocha", BaseURL: "https://api.bocha.cn"},
+				{ID: "kimi", BaseURL: "https://api.moonshot.cn"},
+				{ID: "deepseek", BaseURL: "https://api.deepseek.com"},
+				{ID: "glm", BaseURL: "https://open.bigmodel.cn"},
+			},
+		},
 	}
 }
 

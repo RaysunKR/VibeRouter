@@ -40,10 +40,31 @@ type Decision struct {
 	DispErr string // dispatcher failure reason when degraded
 }
 
+type requestConstraints struct {
+	multimodal  bool
+	tokens      int
+	longContext bool
+}
+
+func constraintsFor(req *protocol.CanonicalRequest, snap *config.Config) requestConstraints {
+	tokens := req.EstimateTokens()
+	return requestConstraints{
+		multimodal:  req.HasMultimodal(),
+		tokens:      tokens,
+		longContext: tokens > snap.Routing.LongContextThreshold,
+	}
+}
+
+type memberEntry struct {
+	model    *config.ResolvedModel
+	priority int
+}
+
 // Route returns the ordered candidate list to try (failover order) plus a
 // decision record. forcedTier may be "" | "advanced" | "basic" (header override).
 func (rt *Router) Route(ctx context.Context, modelName string, req *protocol.CanonicalRequest, forcedTier string) ([]*config.ResolvedModel, *Decision, error) {
 	snap := rt.cfg.Snapshot()
+	constraints := constraintsFor(req, &snap)
 	dec := &Decision{}
 
 	// 1. direct model
@@ -52,7 +73,7 @@ func (rt *Router) Route(ctx context.Context, modelName string, req *protocol.Can
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := checkCaps(r, req, &snap); err != nil {
+		if err := checkCaps(r, constraints); err != nil {
 			return nil, nil, err
 		}
 		dec.Mode = "direct"
@@ -66,111 +87,121 @@ func (rt *Router) Route(ctx context.Context, modelName string, req *protocol.Can
 	}
 	dec.Group = g.Name
 
-	var members []config.GroupMember
 	switch g.Mode {
 	case config.ModeBalance:
 		dec.Mode = "balance"
-		members = g.Members
+		entries := filterMembers(&snap, g.Members, constraints)
+		cands := rt.orderMembers(&snap, g, "balance", entries)
+		if len(cands) == 0 {
+			return nil, dec, ErrNoModel
+		}
+		return cands, dec, nil
 	case config.ModeSmart:
 		dec.Mode = "smart"
+		basic := filterMembers(&snap, g.Basic, constraints)
+		advanced := filterMembers(&snap, g.Advanced, constraints)
 		tier := forcedTier
 		dec.Forced = forcedTier != ""
+
 		if tier == "" {
-			var err error
-			tier, err = rt.classifier(ctx, g, req)
-			if err != nil {
-				tier = config.TierBasic // degrade to basic on dispatcher failure
-				dec.DispErr = err.Error()
+			switch {
+			case len(basic) == 0 && len(advanced) == 0:
+				return nil, dec, ErrNoModel
+			case len(basic) == 0:
+				tier = config.TierAdvanced
+			case len(advanced) == 0:
+				tier = config.TierBasic
+			default:
+				var err error
+				if rt.classifier == nil {
+					err = errors.New("smart group has no classifier")
+				} else {
+					tier, err = rt.classifier(ctx, g, req)
+				}
+				if err != nil {
+					tier = config.TierBasic
+					dec.DispErr = err.Error()
+				}
 			}
 		}
 		if tier != config.TierAdvanced {
 			tier = config.TierBasic
 		}
+		if tier == config.TierBasic && len(basic) == 0 && len(advanced) > 0 {
+			tier = config.TierAdvanced
+		}
 		dec.Tier = tier
-		members = g.Basic
+
 		if tier == config.TierAdvanced {
-			members = g.Advanced
-		}
-		// Try the chosen tier first; on capability mismatch escalate to advanced.
-		cands := rt.pickMembers(&snap, g, members, req)
-		if len(cands) > 0 {
-			return cands, dec, nil
-		}
-		if tier == config.TierBasic {
-			cands = rt.pickMembers(&snap, g, g.Advanced, req)
-			if len(cands) > 0 {
-				dec.Tier = config.TierAdvanced // escalated for capability
-				return cands, dec, nil
+			if len(advanced) == 0 {
+				return nil, dec, ErrNoModel
 			}
+			return rt.orderMembers(&snap, g, config.TierAdvanced, advanced), dec, nil
 		}
-		return nil, dec, ErrNoModel
+		if len(basic) == 0 {
+			return nil, dec, ErrNoModel
+		}
+		return rt.orderMembers(&snap, g, config.TierBasic, basic), dec, nil
 	default:
 		return nil, nil, errors.New("unknown group mode: " + g.Mode)
 	}
-
-	cands := rt.pickMembers(&snap, g, members, req)
-	if len(cands) == 0 {
-		return nil, dec, ErrNoModel
-	}
-	return cands, dec, nil
 }
 
-// pickMembers filters members by modality/context capability, then orders them
-// by priority (lower first), rotating same-priority entries per strategy.
-func (rt *Router) pickMembers(snap *config.Config, g *config.Group, members []config.GroupMember, req *protocol.CanonicalRequest) []*config.ResolvedModel {
-	multi := req.HasMultimodal()
-	long := req.EstimateTokens() > snap.Routing.LongContextThreshold
-
-	type entry struct {
-		r   *config.ResolvedModel
-		pri int
-	}
-	var ok []entry
-	for _, m := range members {
-		model := snap.FindModel(m.Model)
+// filterMembers resolves models that satisfy the request's modality and context
+// constraints without changing load-balancing state.
+func filterMembers(snap *config.Config, members []config.GroupMember, constraints requestConstraints) []memberEntry {
+	var entries []memberEntry
+	for _, member := range members {
+		model := snap.FindModel(member.Model)
 		if model == nil {
 			continue
 		}
-		if multi && !model.Multimodal {
+		if constraints.multimodal && !model.Multimodal {
 			continue
 		}
-		if long && !model.LongContext {
+		if constraints.longContext && !model.LongContext {
 			continue
 		}
-		r, err := snap.ResolveModel(model)
+		if model.MaxTokens > 0 && constraints.tokens > model.MaxTokens {
+			continue
+		}
+		resolved, err := snap.ResolveModel(model)
 		if err != nil {
 			continue
 		}
-		ok = append(ok, entry{r, m.Priority})
+		entries = append(entries, memberEntry{model: resolved, priority: member.Priority})
 	}
-	if len(ok) == 0 {
+	return entries
+}
+
+// orderMembers sorts by priority and rotates only the selected mode or tier.
+func (rt *Router) orderMembers(snap *config.Config, g *config.Group, scope string, entries []memberEntry) []*config.ResolvedModel {
+	if len(entries) == 0 {
 		return nil
 	}
-	sort.SliceStable(ok, func(i, j int) bool { return ok[i].pri < ok[j].pri })
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].priority < entries[j].priority })
 
-	// Rotate within each priority bucket according to the strategy.
 	strategy := g.Strategy
 	if strategy == "" {
 		strategy = snap.Routing.Strategy
 	}
 	var out []*config.ResolvedModel
-	for i := 0; i < len(ok); {
+	for i := 0; i < len(entries); {
 		j := i
-		for j < len(ok) && ok[j].pri == ok[i].pri {
+		for j < len(entries) && entries[j].priority == entries[i].priority {
 			j++
 		}
-		bucket := ok[i:j]
+		bucket := entries[i:j]
 		if len(bucket) > 1 && strategy == "round_robin" {
 			rt.mu.Lock()
-			key := g.Name + "|" + itoa(ok[i].pri)
+			key := g.Name + "|" + scope + "|" + itoa(entries[i].priority)
 			off := rt.rrCursor[key] % len(bucket)
 			rt.rrCursor[key] = rt.rrCursor[key] + 1
 			rt.mu.Unlock()
-			rotated := append(append([]entry{}, bucket[off:]...), bucket[:off]...)
-			bucket = rotated
+			bucket = append(append([]memberEntry{}, bucket[off:]...), bucket[:off]...)
 		}
-		for _, e := range bucket {
-			out = append(out, e.r)
+		for _, entry := range bucket {
+			out = append(out, entry.model)
 		}
 		i = j
 	}
@@ -178,12 +209,15 @@ func (rt *Router) pickMembers(snap *config.Config, g *config.Group, members []co
 }
 
 // checkCaps validates capability constraints for direct mode.
-func checkCaps(r *config.ResolvedModel, req *protocol.CanonicalRequest, snap *config.Config) error {
-	if req.HasMultimodal() && !r.Multimodal {
+func checkCaps(r *config.ResolvedModel, constraints requestConstraints) error {
+	if constraints.multimodal && !r.Multimodal {
 		return errors.New("model " + r.Name + " does not support multimodal input")
 	}
-	if req.EstimateTokens() > snap.Routing.LongContextThreshold && !r.LongContext {
+	if constraints.longContext && !r.LongContext {
 		return errors.New("model " + r.Name + " does not support long context")
+	}
+	if r.MaxTokens > 0 && constraints.tokens > r.MaxTokens {
+		return errors.New("request exceeds context limit of model " + r.Name)
 	}
 	return nil
 }

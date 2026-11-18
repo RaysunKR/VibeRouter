@@ -3,6 +3,7 @@ package logger
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -82,4 +83,43 @@ func TestRetentionConfigurable(t *testing.T) {
 	if _, err := os.Stat(yesterday); !os.IsNotExist(err) {
 		t.Fatal("retention=1 should purge yesterday's file")
 	}
+}
+
+func TestSetBasePath(t *testing.T) {
+	dir := t.TempDir()
+	oldBase := filepath.Join(dir, "old.log")
+	newBase := filepath.Join(dir, "nested", "new.log")
+	l, err := Open(oldBase, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	l.Log(Entry{RequestModel: "before", Status: 200})
+	if err := l.SetBasePath(newBase); err != nil {
+		t.Fatal(err)
+	}
+	l.Log(Entry{RequestModel: "after", Status: 200})
+
+	oldData, err := os.ReadFile(l.dailyPathForTest(oldBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newData, err := os.ReadFile(l.dailyPath(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(oldData), "after") || !strings.Contains(string(oldData), "before") || !strings.Contains(string(newData), "after") {
+		t.Fatalf("log switch failed: old=%s new=%s", oldData, newData)
+	}
+	entries, err := l.Query(QueryFilter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].RequestModel != "after" {
+		t.Fatalf("query after log switch: %+v", entries)
+	}
+}
+
+func (l *FileLogger) dailyPathForTest(base string) string {
+	return (&FileLogger{basePath: base}).dailyPath(time.Now())
 }

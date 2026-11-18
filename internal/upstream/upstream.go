@@ -5,6 +5,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -65,15 +66,25 @@ func Dispatcher(cfg *config.Store) func(ctx context.Context, group *config.Group
 			prompt = DefaultDispatcherPrompt
 		}
 		// Only the text of the last user message, truncated; no history, no images.
-		text := lastUserText(req)
-		if len(text) > 4000 {
-			text = text[:4000]
-		}
+		text := truncateRunes(lastUserText(req), 4000)
 		if strings.TrimSpace(text) == "" {
 			return config.TierBasic, nil
 		}
 		return classify(ctx, resolved, prompt, text, snap.Routing.DispatcherTimeoutSec)
 	}
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	for i := range s {
+		if limit == 0 {
+			return s[:i]
+		}
+		limit--
+	}
+	return s
 }
 
 func lastUserText(req *protocol.CanonicalRequest) string {
@@ -103,7 +114,7 @@ func classify(ctx context.Context, dm *config.ResolvedModel, prompt, text string
 		// 1024: reasoning models (deepseek-v4 etc.) burn tokens on chain-of-thought
 		// before the answer; a tiny budget would yield empty content and force a
 		// degrade-to-basic on every call.
-		MaxTokens:   1024,
+		MaxTokens: 1024,
 	}
 	body, err := BuildRequest(dm.EffectiveProtocol, creq, dm.UpstreamName)
 	if err != nil {
@@ -131,13 +142,36 @@ func classify(ctx context.Context, dm *config.ResolvedModel, prompt, text string
 			out += p.Text
 		}
 	}
-	if strings.Contains(out, "advanced") {
-		return config.TierAdvanced, nil
+	tier, err := parseDispatcherTier(out)
+	if err != nil {
+		return "", fmt.Errorf("unparseable dispatcher output %q: %w", truncate(out, 120), err)
 	}
-	if strings.Contains(out, "basic") {
-		return config.TierBasic, nil
+	return tier, nil
+}
+
+func parseDispatcherTier(out string) (string, error) {
+	raw := strings.TrimSpace(out)
+	if strings.HasPrefix(raw, "```") {
+		if len(raw) < 6 || !strings.HasSuffix(raw, "```") {
+			return "", fmt.Errorf("incomplete dispatcher code block")
+		}
+		raw = strings.TrimSpace(raw[3 : len(raw)-3])
+		if strings.HasPrefix(raw, "json") {
+			raw = strings.TrimSpace(raw[len("json"):])
+		}
 	}
-	return "", fmt.Errorf("unparseable dispatcher output: %q", truncate(out, 120))
+
+	var result struct {
+		Tier string `json:"tier"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return "", err
+	}
+	tier := strings.ToLower(strings.TrimSpace(result.Tier))
+	if tier != config.TierAdvanced && tier != config.TierBasic {
+		return "", fmt.Errorf("invalid dispatcher tier %q", result.Tier)
+	}
+	return tier, nil
 }
 
 func truncate(s string, n int) string {

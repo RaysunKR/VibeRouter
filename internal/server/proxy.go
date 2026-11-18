@@ -70,6 +70,10 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request) {
 	if dec != nil {
 		entry.Mode, entry.Group, entry.Tier, entry.Forced, entry.DispErr = dec.Mode, dec.Group, dec.Tier, dec.Forced, dec.DispErr
 	}
+	if len(canonical.HostedTools) > 0 && s.cfg.Snapshot().WebTools.Enabled {
+		s.handleHostedProxy(w, r, clientProto, canonical, rawBody, candidates, &entry)
+		return
+	}
 
 	var lastErr string
 	for _, cand := range candidates {

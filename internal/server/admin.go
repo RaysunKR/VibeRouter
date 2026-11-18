@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/viberouter/viberouter/internal/config"
@@ -35,7 +37,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, upstream.Presets())
+	presets, err := s.presets.List(r.Context(), false)
+	if err != nil {
+		log.Printf("models.dev preset sync failed, using fallback: %v", err)
+	}
+	writeJSON(w, http.StatusOK, presets)
+}
+
+func (s *Server) handlePresetsRefresh(w http.ResponseWriter, r *http.Request) {
+	presets, err := s.presets.List(r.Context(), true)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "models.dev sync failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, presets)
 }
 
 func (s *Server) handleDefaultPrompt(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +58,21 @@ func (s *Server) handleDefaultPrompt(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- providers ---
+
+func providerCredentialsConflict(c *config.Config, p config.Provider, excludeID string) bool {
+	baseURL := strings.TrimRight(p.BaseURL, "/")
+	for _, existing := range c.Providers {
+		if existing.ID == excludeID {
+			continue
+		}
+		if existing.Protocol == p.Protocol &&
+			strings.TrimRight(existing.BaseURL, "/") == baseURL &&
+			existing.APIKey == p.APIKey {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *Server) handleProviderCreate(w http.ResponseWriter, r *http.Request) {
 	var p config.Provider
@@ -57,6 +87,9 @@ func (s *Server) handleProviderCreate(w http.ResponseWriter, r *http.Request) {
 		if c.FindProvider(p.ID) != nil {
 			return errConflict("provider id already exists")
 		}
+		if providerCredentialsConflict(c, p, "") {
+			return errConflict("provider credentials already exist")
+		}
 		c.Providers = append(c.Providers, p)
 		return nil
 	})
@@ -65,14 +98,25 @@ func (s *Server) handleProviderCreate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProviderUpdate(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	var p config.Provider
-	if !decodeJSON(w, r, &p) {
+	var req struct {
+		config.Provider
+		PresetID *string `json:"preset_id"`
+	}
+	if !decodeJSON(w, r, &req) {
 		return
 	}
+	p := req.Provider
 	err := s.cfg.Mutate(func(c *config.Config) error {
 		for i := range c.Providers {
 			if c.Providers[i].ID == id {
 				p.ID = id
+				p.PresetID = c.Providers[i].PresetID
+				if req.PresetID != nil {
+					p.PresetID = *req.PresetID
+				}
+				if providerCredentialsConflict(c, p, id) {
+					return errConflict("provider credentials already exist")
+				}
 				c.Providers[i] = p
 				return nil
 			}
@@ -80,6 +124,88 @@ func (s *Server) handleProviderUpdate(w http.ResponseWriter, r *http.Request) {
 		return errNotFound("provider not found")
 	})
 	respondMutate(w, err)
+}
+
+func (s *Server) handleProviderSyncPreset(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	snapshot := s.cfg.Snapshot()
+	provider := snapshot.FindProvider(id)
+	if provider == nil {
+		writeError(w, http.StatusNotFound, "provider not found")
+		return
+	}
+	presetID := provider.PresetID
+	if presetID == "" {
+		writeError(w, http.StatusBadRequest, "provider is not linked to a preset")
+		return
+	}
+	presets, err := s.presets.List(r.Context(), true)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "models.dev sync failed: "+err.Error())
+		return
+	}
+	var preset *upstream.ProviderPreset
+	for i := range presets {
+		if presets[i].ID == presetID {
+			preset = &presets[i]
+			break
+		}
+	}
+	if preset == nil {
+		writeError(w, http.StatusNotFound, "linked preset not found")
+		return
+	}
+
+	var updatedProvider config.Provider
+	var skipped []string
+	updatedModels := 0
+	err = s.cfg.Mutate(func(c *config.Config) error {
+		current := c.FindProvider(id)
+		if current == nil {
+			return errNotFound("provider not found")
+		}
+		if current.PresetID != presetID {
+			return errConflict("provider preset binding changed during sync")
+		}
+		updated := *current
+		updated.Protocol = preset.Protocol
+		updated.BaseURL = preset.BaseURL
+		if providerCredentialsConflict(c, updated, id) {
+			return errConflict("provider credentials already exist")
+		}
+
+		updatedProvider = updated
+		*current = updated
+		for i := range c.Models {
+			model := &c.Models[i]
+			if model.Provider != id {
+				continue
+			}
+			metadata, ok := preset.Models[model.UpstreamName]
+			if !ok || metadata.Multimodal == nil && metadata.MaxContextTokens == nil {
+				skipped = append(skipped, model.Name)
+				continue
+			}
+			if metadata.Multimodal != nil {
+				model.Multimodal = *metadata.Multimodal
+			}
+			if metadata.MaxContextTokens != nil {
+				model.MaxTokens = *metadata.MaxContextTokens
+				model.LongContext = model.MaxTokens > c.Routing.LongContextThreshold
+			}
+			updatedModels++
+		}
+		return nil
+	})
+	if err != nil {
+		respondMutate(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider":       updatedProvider,
+		"models_updated": updatedModels,
+		"models_skipped": skipped,
+	})
 }
 
 func (s *Server) handleProviderDelete(w http.ResponseWriter, r *http.Request) {
@@ -328,12 +454,12 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, entries)
 }
 
-// handleSettingsUpdate applies global routing/log settings and hot-applies
-// them (log retention takes effect immediately; routing is read per-request).
+// handleSettingsUpdate applies global routing, logging, and web tool settings.
 func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Routing *config.RoutingConfig `json:"routing"`
-		Logs    *config.LogConfig     `json:"logs"`
+		Routing  *config.RoutingConfig  `json:"routing"`
+		Logs     *config.LogConfig      `json:"logs"`
+		WebTools *config.WebToolsConfig `json:"web_tools"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -342,6 +468,9 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	err := s.cfg.Mutate(func(c *config.Config) error {
 		if req.Routing != nil {
 			c.Routing = *req.Routing
+		}
+		if req.WebTools != nil {
+			c.WebTools = *req.WebTools
 		}
 		if req.Logs != nil {
 			if req.Logs.File == "" {
@@ -356,6 +485,12 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if req.Logs != nil {
+		if err := s.log.SetBasePath(req.Logs.File); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	if retention != nil {
 		s.log.SetRetentionDays(*retention)

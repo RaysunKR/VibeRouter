@@ -14,10 +14,16 @@ config.yaml.tmp
 logs/
 server.out
 
+# Python 测试缓存
+__pycache__/
+*.py[cod]
+
 # 前端
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+web/test-results/
+web/playwright-report/
 
 # go:embed 的前端构建产物（make frontend 会重新生成；保留 index.html 使干净检出可编译）
 internal/server/web/*

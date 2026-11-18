@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { api, Config, Group, GroupMember, Model } from '@/lib/api'
+import { api, Config, Group, GroupMember, Model, Provider } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
+import { modelProviderLabel } from '@/lib/labels'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -41,13 +42,17 @@ const emptyGroup: Group = {
 
 function MemberEditor({
   title,
+  testId,
   members,
   models,
+  providers,
   onChange,
 }: {
   title: string
+  testId: string
   members: GroupMember[]
   models: Model[]
+  providers: Provider[]
   onChange: (members: GroupMember[]) => void
 }) {
   const { d } = useI18n()
@@ -58,13 +63,14 @@ function MemberEditor({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-testid={testId}>
       <div className="flex items-center justify-between">
         <Label>{title}</Label>
         <Button
           type="button"
           variant="outline"
           size="sm"
+          data-testid={`${testId}-add`}
           onClick={() => onChange([...members, { model: models[0]?.name || '', priority: 1 }])}
         >
           <Plus className="h-3 w-3" /> {d.groups.addMember}
@@ -72,16 +78,16 @@ function MemberEditor({
       </div>
       <div className="space-y-2">
         {members.map((m, i) => (
-          <div key={i} className="flex items-center gap-2">
+          <div key={i} className="flex items-center gap-2" data-testid={`${testId}-member-${i}`}>
             <div className="flex-1">
               <Select value={m.model} onValueChange={(v) => update(i, { model: v })}>
-                <SelectTrigger>
+                <SelectTrigger aria-label={`${title} ${d.groups.selectModel} ${i + 1}`} data-testid={`${testId}-member-${i}-model`}>
                   <SelectValue placeholder={d.groups.selectModel} />
                 </SelectTrigger>
                 <SelectContent>
                   {models.map((md) => (
                     <SelectItem key={md.name} value={md.name}>
-                      {md.name}
+                      {modelProviderLabel(md, providers)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -91,6 +97,8 @@ function MemberEditor({
               type="number"
               min={0}
               className="w-24"
+              aria-label={`${title} ${d.groups.priority} ${i + 1}`}
+              data-testid={`${testId}-member-${i}-priority`}
               value={m.priority}
               onChange={(e) => update(i, { priority: parseInt(e.target.value) || 0 })}
               placeholder={d.groups.priority}
@@ -99,6 +107,8 @@ function MemberEditor({
               type="button"
               variant="ghost"
               size="icon"
+              aria-label={`${title} ${i + 1}`}
+              data-testid={`${testId}-member-${i}-remove`}
               onClick={() => onChange(members.filter((_, idx) => idx !== i))}
             >
               <X className="h-4 w-4" />
@@ -209,13 +219,23 @@ export default function GroupsPage() {
   }
 
   const models = config?.models || []
+  const providers = config?.providers || []
 
   const memberSummary = (list?: GroupMember[]) =>
     (list || [])
       .slice()
       .sort((a, b) => a.priority - b.priority)
-      .map((m) => `${m.model} (${m.priority})`)
+      .map((m) => {
+        const model = models.find((md) => md.name === m.model)
+        const label = model ? modelProviderLabel(model, providers) : m.model
+        return `${label} (${m.priority})`
+      })
       .join('、')
+
+  const dispatcherLabel = (name?: string) => {
+    const model = models.find((m) => m.name === name)
+    return model ? modelProviderLabel(model, providers) : name || '—'
+  }
 
   return (
     <div className="space-y-4">
@@ -225,7 +245,7 @@ export default function GroupsPage() {
           <Button variant="outline" size="sm" onClick={load}>
             <RefreshCw className="h-4 w-4" /> {d.common.refresh}
           </Button>
-          <Button size="sm" onClick={openCreate}>
+          <Button size="sm" data-testid="group-add" onClick={openCreate}>
             <Plus className="h-4 w-4" /> {d.groups.add}
           </Button>
         </div>
@@ -244,7 +264,7 @@ export default function GroupsPage() {
           </TableHeader>
           <TableBody>
             {(config?.groups || []).map((g) => (
-              <TableRow key={g.name}>
+              <TableRow key={g.name} data-testid={`group-row-${g.name}`} data-group-name={g.name}>
                 <TableCell className="font-medium">{g.name}</TableCell>
                 <TableCell>
                   <Badge variant={g.mode === 'smart' ? 'default' : 'secondary'}>
@@ -252,7 +272,7 @@ export default function GroupsPage() {
                   </Badge>
                 </TableCell>
                 <TableCell className="text-muted-foreground">
-                  {g.mode === 'smart' ? g.dispatcher_model || '—' : g.strategy || '—'}
+                  {g.mode === 'smart' ? dispatcherLabel(g.dispatcher_model) : g.strategy || '—'}
                 </TableCell>
                 <TableCell className="max-w-[360px]">
                   {g.mode === 'smart' ? (
@@ -271,10 +291,22 @@ export default function GroupsPage() {
                   )}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="icon" onClick={() => openEdit(g)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`${d.groups.edit}: ${g.name}`}
+                    data-testid={`group-edit-${g.name}`}
+                    onClick={() => openEdit(g)}
+                  >
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={() => remove(g)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`${d.common.actions}: ${g.name}`}
+                    data-testid={`group-delete-${g.name}`}
+                    onClick={() => remove(g)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </TableCell>
@@ -292,7 +324,7 @@ export default function GroupsPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl" data-testid="group-dialog">
           <DialogHeader>
             <DialogTitle>{editing ? d.groups.edit : d.groups.add}</DialogTitle>
             <DialogDescription>{d.groups.dialogDescription}</DialogDescription>
@@ -300,8 +332,10 @@ export default function GroupsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{d.groups.name}</Label>
+              <Label htmlFor="group-name">{d.groups.name}</Label>
               <Input
+                id="group-name"
+                data-testid="group-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder={d.groups.namePlaceholder}
@@ -309,12 +343,12 @@ export default function GroupsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>{d.groups.mode}</Label>
+              <Label htmlFor="group-mode">{d.groups.mode}</Label>
               <Select
                 value={form.mode}
                 onValueChange={(v) => setForm({ ...form, mode: v as Group['mode'] })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="group-mode" data-testid="group-mode">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -328,12 +362,12 @@ export default function GroupsPage() {
           {form.mode === 'balance' ? (
             <>
               <div className="space-y-2">
-                <Label>{d.groups.strategy}</Label>
+                <Label htmlFor="group-strategy">{d.groups.strategy}</Label>
                 <Select
                   value={form.strategy || 'round_robin'}
                   onValueChange={(v) => setForm({ ...form, strategy: v })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="group-strategy" data-testid="group-strategy">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -344,26 +378,28 @@ export default function GroupsPage() {
               </div>
               <MemberEditor
                 title={d.groups.membersTitle}
+                testId="group-members"
                 members={form.members || []}
                 models={models}
+                providers={providers}
                 onChange={(members) => setForm({ ...form, members })}
               />
             </>
           ) : (
             <>
               <div className="space-y-2">
-                <Label>{d.groups.dispatcherModel}</Label>
+                <Label htmlFor="group-dispatcher-model">{d.groups.dispatcherModel}</Label>
                 <Select
                   value={form.dispatcher_model || ''}
                   onValueChange={(v) => setForm({ ...form, dispatcher_model: v })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="group-dispatcher-model" data-testid="group-dispatcher-model">
                     <SelectValue placeholder={d.groups.dispatcherPlaceholder} />
                   </SelectTrigger>
                   <SelectContent>
                     {models.map((m) => (
                       <SelectItem key={m.name} value={m.name}>
-                        {m.name}
+                        {modelProviderLabel(m, providers)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -371,12 +407,14 @@ export default function GroupsPage() {
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>{d.groups.dispatcherPrompt}</Label>
-                  <Button type="button" variant="outline" size="sm" onClick={fillDefaultPrompt}>
+                  <Label htmlFor="group-dispatcher-prompt">{d.groups.dispatcherPrompt}</Label>
+                  <Button type="button" variant="outline" size="sm" data-testid="group-fill-default-prompt" onClick={fillDefaultPrompt}>
                     {d.groups.fillDefaultPrompt}
                   </Button>
                 </div>
                 <Textarea
+                  id="group-dispatcher-prompt"
+                  data-testid="group-dispatcher-prompt"
                   rows={5}
                   value={form.dispatcher_prompt || ''}
                   onChange={(e) => setForm({ ...form, dispatcher_prompt: e.target.value })}
@@ -386,14 +424,18 @@ export default function GroupsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <MemberEditor
                   title={d.groups.advancedTier}
+                  testId="group-advanced"
                   members={form.advanced || []}
                   models={models}
+                  providers={providers}
                   onChange={(advanced) => setForm({ ...form, advanced })}
                 />
                 <MemberEditor
                   title={d.groups.basicTier}
+                  testId="group-basic"
                   members={form.basic || []}
                   models={models}
+                  providers={providers}
                   onChange={(basic) => setForm({ ...form, basic })}
                 />
               </div>
@@ -404,7 +446,7 @@ export default function GroupsPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               {d.common.cancel}
             </Button>
-            <Button onClick={save} disabled={saving}>
+            <Button data-testid="group-save" onClick={save} disabled={saving}>
               {saving ? d.common.saving : d.common.save}
             </Button>
           </DialogFooter>

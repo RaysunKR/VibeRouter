@@ -118,7 +118,7 @@ export default function LoginPage() {
                 )}
               </div>
             </div>
-            {error && <div className="text-sm text-destructive">{error}</div>}
+            {error && <div role="alert" data-testid="login-error" className="text-sm text-destructive">{error}</div>}
             <Button type="submit" className="w-full" disabled={loading || !captchaId}>
               {loading ? d.login.signingIn : d.login.signIn}
             </Button>

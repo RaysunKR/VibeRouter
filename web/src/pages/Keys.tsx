@@ -131,7 +131,7 @@ export default function KeysPage() {
           <Button variant="outline" size="sm" onClick={load}>
             <RefreshCw className="h-4 w-4" /> {d.common.refresh}
           </Button>
-          <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" data-testid="key-create" onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" /> {d.keys.create}
           </Button>
         </div>
@@ -150,12 +150,19 @@ export default function KeysPage() {
           </TableHeader>
           <TableBody>
             {(config?.keys || []).map((k) => (
-              <TableRow key={k.id}>
+              <TableRow key={k.id} data-testid={`key-row-${k.id}`} data-key-name={k.name}>
                 <TableCell className="font-medium">{k.name}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
                     <code className="text-xs text-muted-foreground">{maskKey(k.key)}</code>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => copy(k)}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      aria-label={`${d.keys.key}: ${k.name}`}
+                      data-testid={`key-copy-${k.id}`}
+                      onClick={() => copy(k)}
+                    >
                       {copied === k.id ? (
                         <Check className="h-3.5 w-3.5 text-green-500" />
                       ) : (
@@ -166,7 +173,12 @@ export default function KeysPage() {
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">
-                    <Switch checked={k.enabled} onCheckedChange={(v) => toggle(k, v)} />
+                    <Switch
+                      aria-label={`${d.keys.status}: ${k.name}`}
+                      data-testid={`key-enabled-${k.id}`}
+                      checked={k.enabled}
+                      onCheckedChange={(v) => toggle(k, v)}
+                    />
                     <Badge variant={k.enabled ? 'success' : 'secondary'}>
                       {k.enabled ? d.keys.enabled : d.keys.disabled}
                     </Badge>
@@ -179,6 +191,8 @@ export default function KeysPage() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={`${d.keys.rename}: ${k.name}`}
+                    data-testid={`key-rename-${k.id}`}
                     onClick={() => {
                       setRenameTarget(k)
                       setRenameValue(k.name)
@@ -186,7 +200,13 @@ export default function KeysPage() {
                   >
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={() => remove(k)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`${d.common.actions}: ${k.name}`}
+                    data-testid={`key-delete-${k.id}`}
+                    onClick={() => remove(k)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </TableCell>
@@ -204,13 +224,15 @@ export default function KeysPage() {
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" data-testid="key-create-dialog">
           <DialogHeader>
             <DialogTitle>{d.keys.create}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>{d.common.name}</Label>
+            <Label htmlFor="key-create-name">{d.common.name}</Label>
             <Input
+              id="key-create-name"
+              data-testid="key-create-name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder={d.keys.namePlaceholder}
@@ -221,7 +243,7 @@ export default function KeysPage() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               {d.common.cancel}
             </Button>
-            <Button onClick={create} disabled={saving}>
+            <Button data-testid="key-create-submit" onClick={create} disabled={saving}>
               {d.keys.createBtn}
             </Button>
           </DialogFooter>
@@ -229,13 +251,15 @@ export default function KeysPage() {
       </Dialog>
 
       <Dialog open={!!renameTarget} onOpenChange={(v) => !v && setRenameTarget(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm" data-testid="key-rename-dialog">
           <DialogHeader>
             <DialogTitle>{d.keys.rename}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
-            <Label>{d.common.name}</Label>
+            <Label htmlFor="key-rename-name">{d.common.name}</Label>
             <Input
+              id="key-rename-name"
+              data-testid="key-rename-name"
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && rename()}
@@ -245,7 +269,7 @@ export default function KeysPage() {
             <Button variant="outline" onClick={() => setRenameTarget(null)}>
               {d.common.cancel}
             </Button>
-            <Button onClick={rename} disabled={saving}>
+            <Button data-testid="key-rename-save" onClick={rename} disabled={saving}>
               {d.common.save}
             </Button>
           </DialogFooter>

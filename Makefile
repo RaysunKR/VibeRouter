@@ -1,4 +1,4 @@
-.PHONY: build frontend backend test run
+.PHONY: build frontend backend test e2e run
 
 build: frontend backend
 
@@ -10,6 +10,9 @@ backend:
 
 test:
 	go vet ./... && go test ./...
+
+e2e:
+	bash tests/e2e/run_all.sh
 
 run: build
 	./viberouter

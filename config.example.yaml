@@ -20,6 +20,7 @@ providers: []
 #    protocol: chat_completions              # chat_completions | responses | anthropic
 #    base_url: https://api.deepseek.com
 #    api_key: sk-xxxxxxxx                    # 供应商级默认密钥/地址，模型条目可覆盖
+#    preset_id: deepseek                     # 可选预设来源；用于显式同步该实例及已有模型的信息
 #    balance: { type: deepseek }             # 内置余额探针（可选），支持 deepseek/siliconflow/openrouter 等
 
 # 模型列表。name 是对外暴露的路由名，客户端请求时使用它；
@@ -51,6 +52,20 @@ groups: []
 
 # 客户端访问 Key（vr- 前缀）。建议直接在管理端创建，此处仅作备份/迁移用。
 keys: []
+
+# 统一网页搜索/抓取工具。也可在管理端“Web 工具”页配置。
+web_tools:
+  enabled: false               # 接管 Responses/Anthropic 原生 web_search/web_fetch 声明
+  mcp_enabled: false           # 在 /mcp 暴露统一 Streamable HTTP MCP（使用 vr- Key）
+  search_provider: deepseek    # bocha | kimi | deepseek | glm
+  fetch_provider: deepseek     # kimi | deepseek | glm（博查不支持独立抓取）
+  timeout_sec: 30
+  max_calls: 8                 # 单次推理请求中的最大 Web 工具调用数
+  providers:
+    - {id: bocha, enabled: false, api_key: "", base_url: "https://api.bocha.cn"}
+    - {id: kimi, enabled: false, api_key: "", base_url: "https://api.moonshot.cn"}
+    - {id: deepseek, enabled: false, api_key: "", base_url: "https://api.deepseek.com"}
+    - {id: glm, enabled: false, api_key: "", base_url: "https://open.bigmodel.cn"}
 
 logs:
   file: logs/router.log   # JSON Lines 访问日志，按天切分

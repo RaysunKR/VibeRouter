@@ -125,6 +125,8 @@ func (l *FileLogger) Log(e Entry) {
 
 // purgeOld deletes daily files older than the retention window.
 func (l *FileLogger) purgeOld() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	dir := filepath.Dir(l.basePath)
 	base := filepath.Base(l.basePath)
 	ext := filepath.Ext(base)
@@ -140,12 +142,8 @@ func (l *FileLogger) purgeOld() {
 		if err != nil {
 			continue
 		}
-		if t.Before(cutoff) {
-			l.mu.Lock()
-			if m != l.dailyPath(time.Now()) {
-				_ = os.Remove(m)
-			}
-			l.mu.Unlock()
+		if t.Before(cutoff) && m != l.dailyPath(time.Now()) {
+			_ = os.Remove(m)
 		}
 	}
 }
@@ -159,6 +157,38 @@ func (l *FileLogger) SetRetentionDays(days int) {
 	l.retentionDays = days
 	l.mu.Unlock()
 	l.purgeOld()
+}
+
+// SetBasePath switches future writes and queries to a new daily log family.
+func (l *FileLogger) SetBasePath(basePath string) error {
+	if basePath == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+		return err
+	}
+	now := time.Now()
+	dailyPath := (&FileLogger{basePath: basePath}).dailyPath(now)
+	f, err := os.OpenFile(dailyPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+
+	l.mu.Lock()
+	if l.basePath == basePath {
+		l.mu.Unlock()
+		return f.Close()
+	}
+	old := l.f
+	l.basePath = basePath
+	l.f = f
+	l.curDate = now.Format("2006-01-02")
+	l.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	l.purgeOld()
+	return nil
 }
 
 func (l *FileLogger) Close() error {
@@ -183,6 +213,8 @@ type QueryFilter struct {
 // Query scans daily files within the retention window (newest first) and
 // returns the most recent matching entries, newest first.
 func (l *FileLogger) Query(q QueryFilter) ([]Entry, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if q.Limit <= 0 || q.Limit > 1000 {
 		q.Limit = 200
 	}

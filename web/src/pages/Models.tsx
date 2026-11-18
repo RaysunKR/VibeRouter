@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { api, Config, Model } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
+import { providerLabel, providerLabelFor } from '@/lib/labels'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -123,7 +124,7 @@ export default function ModelsPage() {
           <Button variant="outline" size="sm" onClick={load}>
             <RefreshCw className="h-4 w-4" /> {d.common.refresh}
           </Button>
-          <Button size="sm" onClick={openCreate}>
+          <Button size="sm" data-testid="model-add" onClick={openCreate}>
             <Plus className="h-4 w-4" /> {d.models.add}
           </Button>
         </div>
@@ -143,11 +144,11 @@ export default function ModelsPage() {
           </TableHeader>
           <TableBody>
             {(config?.models || []).map((m) => (
-              <TableRow key={m.name}>
+              <TableRow key={m.name} data-testid={`model-row-${m.name}`} data-model-name={m.name}>
                 <TableCell className="font-medium">{m.name}</TableCell>
                 <TableCell>
                   <Badge variant="outline">
-                    {config?.providers.find((p) => p.id === m.provider)?.name || m.provider}
+                    {providerLabelFor(config?.providers || [], m.provider)}
                   </Badge>
                 </TableCell>
                 <TableCell className="text-muted-foreground">{m.upstream_model}</TableCell>
@@ -164,10 +165,22 @@ export default function ModelsPage() {
                   {m.max_context_tokens ? m.max_context_tokens.toLocaleString() : '—'}
                 </TableCell>
                 <TableCell className="text-right">
-                  <Button variant="ghost" size="icon" onClick={() => openEdit(m)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`${d.models.edit}: ${m.name}`}
+                    data-testid={`model-edit-${m.name}`}
+                    onClick={() => openEdit(m)}
+                  >
                     <Pencil className="h-4 w-4" />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={() => remove(m)}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`${d.common.actions}: ${m.name}`}
+                    data-testid={`model-delete-${m.name}`}
+                    onClick={() => remove(m)}
+                  >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </TableCell>
@@ -185,7 +198,7 @@ export default function ModelsPage() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent data-testid="model-dialog">
           <DialogHeader>
             <DialogTitle>{editing ? d.models.edit : d.models.add}</DialogTitle>
             <DialogDescription>{d.models.dialogDescription}</DialogDescription>
@@ -193,8 +206,10 @@ export default function ModelsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{d.models.routeName}</Label>
+              <Label htmlFor="model-name">{d.models.routeName}</Label>
               <Input
+                id="model-name"
+                data-testid="model-name"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder={d.models.routeNamePlaceholder}
@@ -202,7 +217,7 @@ export default function ModelsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>{d.models.provider}</Label>
+              <Label htmlFor="model-provider">{d.models.provider}</Label>
               {(config?.providers.length ?? 0) === 0 ? (
                 <div className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
                   {d.models.noProviders}
@@ -212,13 +227,13 @@ export default function ModelsPage() {
                   value={form.provider}
                   onValueChange={(v) => setForm({ ...form, provider: v })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id="model-provider" data-testid="model-provider">
                     <SelectValue placeholder={d.models.selectProvider} />
                   </SelectTrigger>
                   <SelectContent>
                     {(config?.providers || []).map((p) => (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.name}
+                        {providerLabel(p)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -228,8 +243,10 @@ export default function ModelsPage() {
           </div>
 
           <div className="space-y-2">
-            <Label>{d.models.upstreamModel}</Label>
+            <Label htmlFor="model-upstream">{d.models.upstreamModel}</Label>
             <Input
+              id="model-upstream"
+              data-testid="model-upstream"
               value={form.upstream_model}
               onChange={(e) => setForm({ ...form, upstream_model: e.target.value })}
               placeholder={d.models.upstreamPlaceholder}
@@ -238,8 +255,10 @@ export default function ModelsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{d.models.apiKeyOverride}</Label>
+              <Label htmlFor="model-api-key">{d.models.apiKeyOverride}</Label>
               <Input
+                id="model-api-key"
+                data-testid="model-api-key"
                 value={form.api_key || ''}
                 onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                 placeholder={d.models.apiKeyPlaceholder}
@@ -248,8 +267,10 @@ export default function ModelsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label>{d.models.baseUrlOverride}</Label>
+              <Label htmlFor="model-base-url">{d.models.baseUrlOverride}</Label>
               <Input
+                id="model-base-url"
+                data-testid="model-base-url"
                 value={form.base_url || ''}
                 onChange={(e) => setForm({ ...form, base_url: e.target.value })}
                 placeholder={d.models.baseUrlPlaceholder}
@@ -259,12 +280,12 @@ export default function ModelsPage() {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{d.models.protocolOverride}</Label>
+              <Label htmlFor="model-protocol">{d.models.protocolOverride}</Label>
               <Select
                 value={form.protocol || 'default'}
                 onValueChange={(v) => setForm({ ...form, protocol: v === 'default' ? '' : v })}
               >
-                <SelectTrigger>
+                <SelectTrigger id="model-protocol" data-testid="model-protocol">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -276,8 +297,10 @@ export default function ModelsPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>{d.models.maxTokens}</Label>
+              <Label htmlFor="model-max-context">{d.models.maxTokens}</Label>
               <Input
+                id="model-max-context"
+                data-testid="model-max-context"
                 type="number"
                 min={0}
                 value={form.max_context_tokens || ''}
@@ -292,17 +315,21 @@ export default function ModelsPage() {
           <div className="flex gap-8">
             <div className="flex items-center gap-2">
               <Switch
+                id="model-multimodal"
+                data-testid="model-multimodal"
                 checked={form.multimodal}
                 onCheckedChange={(v) => setForm({ ...form, multimodal: v })}
               />
-              <Label>{d.models.multimodal}</Label>
+              <Label htmlFor="model-multimodal">{d.models.multimodal}</Label>
             </div>
             <div className="flex items-center gap-2">
               <Switch
+                id="model-long-context"
+                data-testid="model-long-context"
                 checked={form.long_context}
                 onCheckedChange={(v) => setForm({ ...form, long_context: v })}
               />
-              <Label>{d.models.longContext}</Label>
+              <Label htmlFor="model-long-context">{d.models.longContext}</Label>
             </div>
           </div>
 
@@ -310,7 +337,7 @@ export default function ModelsPage() {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               {d.common.cancel}
             </Button>
-            <Button onClick={save} disabled={saving || (config?.providers.length ?? 0) === 0}>
+            <Button data-testid="model-save" onClick={save} disabled={saving || (config?.providers.length ?? 0) === 0}>
               {saving ? d.common.saving : d.common.save}
             </Button>
           </DialogFooter>

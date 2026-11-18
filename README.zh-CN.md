@@ -26,6 +26,7 @@ VibeRouter 用 Golang 实现，对外暴露统一的自适应 API 端点——�
 - [配置详解 config.yaml](#配置详解-configyaml)
 - [管理端使用指南](#管理端使用指南)
 - [客户端接入示例](#客户端接入示例)
+- [Web 搜索、抓取与 MCP](#web-搜索抓取与-mcp)
 - [路由行为详解](#路由行为详解)
 - [日志](#日志)
 - [余额/配额查询](#余额配额查询)
@@ -49,7 +50,7 @@ VibeRouter 用 Golang 实现，对外暴露统一的自适应 API 端点——�
 | 访问日志 | JSON Lines 按天切分文件，默认保留 7 天（可调），管理端按 Key/模型/状态码/时间过滤 |
 | 管理界面 | shadcn/ui 界面，中英双语可切换（跟随浏览器语言，可手动切换并记忆），由 Go 二进制内嵌托管 |
 
-内置 25 个供应商预设（DeepSeek、智谱、MiniMax、Kimi、SiliconFlow、OpenRouter、火山方舟、阿里百炼、ModelScope、PPIO 等，取自 cc-switch），管理端一键预填。
+内置 26 个供应商预设（DeepSeek、智谱、MiniMax、Kimi、SiliconFlow、OpenRouter、火山方舟、阿里百炼、ModelScope、PPIO 等，取自 cc-switch），管理端一键预填。预设目录还会自动从 [models.dev](https://models.dev/api.json) 获取最新供应商并缓存 1 小时；点击“同步 models.dev”可立即刷新，网络不可用时回退到最近缓存或内置预设。
 
 ---
 
@@ -297,6 +298,21 @@ logs:
   retention_days: 7                # 日志保存天数，默认 7
 ```
 
+同一预设可创建多个账号实例。实例 ID 必须唯一；协议、地址和 Key 完全相同的重复实例会被拒绝。名称可自定义，`preset_id` 记录预设来源，模型通过 `provider` 引用实例 ID，分组继续引用模型名：
+
+```yaml
+providers:
+  - {id: deepseek-prod, name: DeepSeek 生产账号, protocol: chat_completions, base_url: https://api.deepseek.com, api_key: sk-prod, preset_id: deepseek}
+  - {id: deepseek-backup, name: DeepSeek 备用账号, protocol: chat_completions, base_url: https://api.deepseek.com, api_key: sk-backup, preset_id: deepseek}
+models:
+  - {name: ds-prod, provider: deepseek-prod, upstream_model: deepseek-v4-flash}
+  - {name: ds-backup, provider: deepseek-backup, upstream_model: deepseek-v4-flash}
+```
+
+管理端再次选择同一预设时会自动生成 `deepseek-2` 等可用实例 ID；模型和分组选择器会显示“自定义名称 (实例 ID)”。旧实例可在编辑对话框中绑定、改绑或解除预设来源。
+
+已绑定实例可点击操作列的“从预设更新”：强制获取最新 models.dev 数据，更新该实例的协议/Base URL，并按 `provider + upstream_model` 精确更新已有模型的多模态、上下文上限和长上下文标记。Key、名称、实例 ID、模型路由名、上游模型 ID、模型覆盖项和分组关系均保持不变；未匹配或元数据缺失的模型保留原值。`long_context` 根据同步时的上下文上限是否大于全局长上下文阈值计算。
+
 `.env`（管理员凭证，切勿提交到版本库）：
 
 ```ini
@@ -311,7 +327,8 @@ ADMIN_SESSION_SECRET=<随机十六进制，重启后旧登录态失效>
 
 | 页面 | 功能 |
 |---|---|
-| 供应商 | 预设模板一键预填；编辑/删除；**查余额**按钮（现金余额或配额百分比） |
+| 供应商 | 内置与 models.dev 预设一键预填；多账号实例；绑定预设来源；从最新预设更新实例及已有模型；编辑/删除；**查余额** |
+| Web 工具 | 博查/Kimi/DeepSeek/GLM 搜索与抓取；Responses/Anthropic 原生桥接；统一 MCP；Key、超时和调用上限配置 |
 | 模型 | 全字段增删改查；多模态/长上下文开关徽章 |
 | 分组路由 | 负载均衡组：成员+优先级；智能组：调度模型、**调度提示词可编辑**（可一键填入默认提示词）、强/普通两个子组 |
 | Key 管理 | 创建（`vr-` 前缀自动生成）、复制、改名、启用/禁用、删除 |
@@ -356,15 +373,64 @@ X-VibeRouter-Tier: advanced    # 或 basic
 
 ---
 
+## Web 搜索、抓取与 MCP
+
+管理端“Web 工具”页可配置四家官方 API，并分别开启 Responses/Anthropic 原生桥接和 MCP。功能默认关闭；搜索与抓取供应商可独立选择。
+
+| 供应商 | 网页搜索 | 网页抓取 |
+|---|---|---|
+| 博查 | `POST /v1/web-search` | 不支持独立抓取 |
+| Kimi | `/v1/tools/search` | `/v1/tools/fetch` |
+| DeepSeek | `/v1/tools/search` | `/v1/tools/fetch` |
+| GLM | `/api/paas/v4/web_search` | `/api/paas/v4/reader` |
+
+**Responses API**：声明 `web_search`；VibeRouter 还接受 `web_fetch` 扩展，并以 `web_search_call.action.open_page` 返回抓取记录。
+
+```python
+r = client.responses.create(
+    model="auto", input="搜索最新消息并总结来源",
+    tools=[{"type": "web_search"}, {"type": "web_fetch"}],
+)
+print(r.output_text)
+```
+
+**Anthropic Messages**：使用标准带版本的服务端工具声明，支持 `max_uses`、allowed/blocked domains。
+
+```python
+r = client.messages.create(
+    model="auto", max_tokens=2048,
+    messages=[{"role": "user", "content": "搜索并阅读 https://example.com/article"}],
+    tools=[
+        {"type": "web_search_20250305", "name": "web_search", "max_uses": 3},
+        {"type": "web_fetch_20250910", "name": "web_fetch"},
+    ],
+)
+```
+
+桥接启用后，VibeRouter 会执行“模型调用工具 → 统一供应商搜索/抓取 → 回填结果 → 模型最终回答”的受限循环，并返回原生 `web_search_call` 或 `server_tool_use`/结果块。流式请求在工具循环期间缓冲，完成后输出标准 SSE。`max_calls` 限制单次请求的总工具调用数。
+
+**统一 MCP**：开启后使用 `http://<host>:8080/mcp`，采用标准 Streamable HTTP，鉴权头为 `Authorization: Bearer vr-xxxx`。MCP 与 API 桥接开关相互独立。
+
+```json
+{
+  "url": "http://<host>:8080/mcp",
+  "headers": {"Authorization": "Bearer vr-xxxx"}
+}
+```
+
+MCP 固定提供 `web_search` 和 `web_fetch`（以实际配置为准），结果同时包含文本 JSON 和 `structuredContent`。搜索统一为 `{provider, query, results:[{title,url,snippet,content,site_name,published_at}]}`，抓取统一为 `{provider,url,title,content,format}`。MCP 为标准无状态实现，不需要客户端保存会话 ID。
+
+---
+
 ## 路由行为详解
 
 **路由决策顺序**（三种模式通用）：
 
 1. 模型名解析：先匹配模型，再匹配分组
 2. 模态过滤：请求含图片 → 只在 `multimodal: true` 的模型中选择
-3. 上下文过滤：估算 token（文本 ≈ 字符数/4，图片按 1000 计）超过阈值 → 只在 `long_context: true` 的模型中选择
-4. 智能组额外步骤：调度模型判复杂度选层级；所选层级无能力匹配模型时**自动升级到强模型组**
-5. 组内按优先级排序，同优先级按策略轮询/随机
+3. 上下文过滤：估算 token（文本 ≈ 字符数/4，图片按 1000 计）超过阈值 → 只在 `long_context: true` 的模型中选择；估算输入超过 `max_context_tokens` 的模型也会被排除
+4. 智能组额外步骤：先检查两个层级的可用候选，仅一组可用时直接选择并跳过调度；两组均可用时由调度模型判断复杂度；普通组无能力匹配模型时**自动升级到强模型组**
+5. 组内按优先级排序，同优先级按策略轮询/随机；智能组的两个层级分别维护轮询状态
 
 **故障转移触发条件**（对客户端透明，自动尝试下一个候选）：
 
@@ -375,7 +441,8 @@ X-VibeRouter-Tier: advanced    # 或 basic
 
 **智能调度细节**：
 
-- 只把最后一条 user 消息的文本（截断 4000 字符）发给调度模型，不带历史、不带图片，`temperature=0`
+- 只把最后一条 user 消息的文本（按 Unicode 字符安全截断到前 4000 字符）发给调度模型，不带历史、不带图片，`temperature=0`
+- 调度输出按 JSON 的 `tier` 字段解析，兼容常见 Markdown JSON 代码块；解释性文字或非法输出不会被当作分类结果
 - 调度超时 5 秒（可配）；调度失败/输出无法解析 → **降级到普通模型组**，日志记录降级原因
 - 调度模型建议选便宜快速的模型；推理型模型（如 deepseek-v4）也可作调度模型（内部已预留足够 token 预算）
 
@@ -445,13 +512,18 @@ A: 删除 `.env` 中 `ADMIN_PASSWORD_HASH` 一行并重启 → 会重新生成 a
 ```bash
 go vet ./... && go test ./...                 # 单元 + 集成测试（协议转换/路由矩阵/管理端流程）
 
-# 三协议 mock 上游 + 官方 SDK 兼容性套件（39 项）
-go build -o mockupstream ./cmd/mockupstream
+# 完整验收：真实后端 + 内嵌前端 + 官方 SDK + Web 工具 + MCP + Playwright
+make e2e
+
+# 也可单独运行后端/浏览器套件
 python tests/e2e/run_tests.py ./viberouter ./mockupstream
+cd web && corepack pnpm exec playwright test
 
 # Linux 双主机跨网络验收（需配置主机与凭证）
 python tests/e2e/deploy_linux.py
 ```
+
+完整套件使用本地 mock 和独立临时配置，不读取真实 `.env`，默认不访问公网。可通过 `VR_ROUTER_PORT`、`VR_MOCK_PORT`、`VR_UI_PORT` 避让端口；Playwright 失败截图和 trace 位于 `web/test-results/`。
 
 ## License
 

@@ -7,6 +7,7 @@ import ModelsPage from '@/pages/Models'
 import GroupsPage from '@/pages/Groups'
 import KeysPage from '@/pages/Keys'
 import LogsPage from '@/pages/Logs'
+import WebToolsPage from '@/pages/WebTools'
 import SettingsPage from '@/pages/Settings'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="models" element={<ModelsPage />} />
         <Route path="groups" element={<GroupsPage />} />
         <Route path="keys" element={<KeysPage />} />
+        <Route path="web-tools" element={<WebToolsPage />} />
         <Route path="logs" element={<LogsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

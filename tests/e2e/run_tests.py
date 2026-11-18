@@ -3,7 +3,7 @@
 # 用法: python run_tests.py <viberouter.exe> <mockupstream.exe>
 import json
 import os
-import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,12 +13,19 @@ import requests
 from openai import OpenAI
 from anthropic import Anthropic
 
-ROUTER = os.environ.get("VR_ROUTER", "http://127.0.0.1:18080")
-MOCK = os.environ.get("VR_MOCK", "http://127.0.0.1:19000")
-REMOTE = os.environ.get("VR_REMOTE") == "1"
-KEY = "vr-e2ekey"
+from extended_tests import run_extended
 
-PASS, FAIL = [], []
+ROUTER_PORT = int(os.environ.get("VR_ROUTER_PORT", "18080"))
+MOCK_PORT = int(os.environ.get("VR_MOCK_PORT", "19000"))
+ROUTER = os.environ.get("VR_ROUTER", f"http://127.0.0.1:{ROUTER_PORT}")
+MOCK = os.environ.get("VR_MOCK", f"http://127.0.0.1:{MOCK_PORT}")
+REMOTE = os.environ.get("VR_REMOTE") == "1"
+UI_PORT = int(os.environ.get("VR_UI_PORT", "18181"))
+KEY = "vr-e2ekey"
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+PASS, FAIL, SKIPPED = [], [], []
+PROCESS_LOGS = []
 
 
 def check(name, cond, detail=""):
@@ -28,6 +35,11 @@ def check(name, cond, detail=""):
     else:
         FAIL.append(name)
         print(f"  FAIL {name}  {detail}")
+
+
+def skip(name):
+    SKIPPED.append(name)
+    print(f"  SKIP {name}")
 
 
 def wait_ready(url, timeout=10):
@@ -42,7 +54,7 @@ def wait_ready(url, timeout=10):
 
 
 CONFIG = f"""
-server: {{addr: "127.0.0.1:18080", disable_captcha: true}}
+server: {{addr: "127.0.0.1:{ROUTER_PORT}", disable_captcha: true}}
 routing: {{long_context_threshold: 200000, dispatcher_timeout_sec: 5, strategy: round_robin}}
 providers:
   - {{id: p-chat, name: MockChat, protocol: chat_completions, base_url: "{MOCK}", api_key: upkey, balance: {{type: deepseek}}}}
@@ -67,6 +79,28 @@ groups:
       - {{model: m-chat, priority: 1}}
     basic:
       - {{model: m-anth, priority: 1}}
+  - name: smart-basic-only
+    mode: smart
+    dispatcher_model: m-broke
+    advanced: []
+    basic:
+      - {{model: m-anth, priority: 1}}
+  - name: smart-vision
+    mode: smart
+    dispatcher_model: m-broke
+    advanced:
+      - {{model: m-chat, priority: 1}}
+    basic:
+      - {{model: m-broke, priority: 1}}
+web_tools:
+  enabled: true
+  mcp_enabled: true
+  search_provider: deepseek
+  fetch_provider: deepseek
+  timeout_sec: 5
+  max_calls: 4
+  providers:
+    - {{id: deepseek, enabled: true, api_key: web-key, base_url: "{MOCK}"}}
 keys:
   - {{id: k1, key: {KEY}, name: e2e, enabled: true, created_at: "2026-08-15T00:00:00Z"}}
 logs: {{file: "logs/e2e.log"}}
@@ -76,45 +110,201 @@ TINY_PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
             "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 
 
-def main():
-    if REMOTE:
-        assert wait_ready(MOCK + "/user/balance"), "mock not ready"
-        assert wait_ready(ROUTER + "/"), "router not ready"
-        run_all()
-        print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
-        if FAIL:
-            print("failed:", *FAIL, sep="\n  - ")
-            sys.exit(1)
-        return
+def write_file(path, content=""):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
 
-    router_exe, mock_exe = sys.argv[1], sys.argv[2]
-    workdir = tempfile.mkdtemp(prefix="viberouter-e2e-")
-    with open(os.path.join(workdir, "config.yaml"), "w", encoding="utf-8") as f:
-        f.write(CONFIG)
-    env_path = os.path.join(workdir, ".env")
-    open(env_path, "w").write("")
 
-    mock = subprocess.Popen([mock_exe, "-port", "19000"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    router = subprocess.Popen([router_exe, "-config", os.path.join(workdir, "config.yaml"),
-                               "-env", env_path],
-                              cwd=workdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def process_environment():
+    return dict(os.environ, VR_MODELS_DEV_URL=MOCK + "/api.json")
+
+
+def launch(name, args, cwd, log_path):
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    handle = open(log_path, "a", encoding="utf-8")
+    if log_path not in PROCESS_LOGS:
+        PROCESS_LOGS.append(log_path)
     try:
-        assert wait_ready(MOCK + "/user/balance"), "mock not ready"
-        assert wait_ready(ROUTER + "/"), "router not ready"
-        run_all()
-    finally:
-        for p in (router, mock):
-            p.terminate()
-            try:
-                p.wait(timeout=5)
-            except Exception:
-                p.kill()
+        process = subprocess.Popen(args, cwd=cwd, env=process_environment(),
+                                   stdout=handle, stderr=subprocess.STDOUT)
+    except Exception:
+        handle.close()
+        raise
+    process.e2e_log_handle = handle
+    print(f"  START {name}: pid={process.pid}, log={log_path}")
+    return process
 
-    print(f"\n===== {len(PASS)} passed, {len(FAIL)} failed =====")
+
+def stop_process(process):
+    if process is None:
+        return
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    handle = getattr(process, "e2e_log_handle", None)
+    if handle:
+        handle.close()
+
+
+def run_backend(config_path=None, restart_router=None):
+    try:
+        run_all()
+    except Exception as exc:
+        check("现有 52 项套件执行", False, f"{type(exc).__name__}: {exc}")
+    try:
+        run_extended(ROUTER, MOCK, KEY, check, skip,
+                     config_path=config_path, restart_router=restart_router)
+    except Exception as exc:
+        check("扩展后端套件执行", False, f"{type(exc).__name__}: {exc}")
+
+
+def playwright_command():
+    if os.name == "nt":
+        corepack = shutil.which("corepack.cmd") or shutil.which("corepack")
+    else:
+        corepack = shutil.which("corepack")
+    if not corepack:
+        raise RuntimeError("corepack/corepack.cmd not found")
+    return [corepack, "pnpm", "exec", "playwright", "test"]
+
+
+def run_playwright(base_url, log_path):
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    if log_path not in PROCESS_LOGS:
+        PROCESS_LOGS.append(log_path)
+    env = dict(os.environ, VR_E2E_BASE_URL=base_url, VR_E2E_MOCK_URL=MOCK,
+               VR_MODELS_DEV_URL=MOCK + "/api.json")
+    print(f"\n--- UI Playwright: {base_url} ---")
+    print(f"  UI log: {log_path}")
+    try:
+        with open(log_path, "w", encoding="utf-8") as handle:
+            result = subprocess.run(playwright_command(), cwd=os.path.join(ROOT, "web"), env=env,
+                                    stdout=handle, stderr=subprocess.STDOUT, check=False)
+        passed = result.returncode == 0
+    except Exception as exc:
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(f"\nrunner error: {type(exc).__name__}: {exc}\n")
+        passed = False
+    print(f"  UI {'PASS' if passed else 'FAIL'}")
+    return passed
+
+
+def print_summary(ui_passed):
+    print(f"\n===== Backend: {len(PASS)} passed, {len(FAIL)} failed, "
+          f"{len(SKIPPED)} skipped =====")
+    if ui_passed is not None:
+        print(f"===== UI: {'PASS' if ui_passed else 'FAIL'} =====")
     if FAIL:
         print("failed:", *FAIL, sep="\n  - ")
-        sys.exit(1)
+    if SKIPPED:
+        print("skipped:", *SKIPPED, sep="\n  - ")
+    if FAIL or ui_passed is False:
+        print("process/test logs:", *PROCESS_LOGS, sep="\n  - ")
+
+
+def main():
+    ui_passed = None
+    if REMOTE:
+        if not wait_ready(MOCK + "/user/balance"):
+            check("REMOTE mock ready", False, MOCK)
+        elif not wait_ready(ROUTER + "/"):
+            check("REMOTE router ready", False, ROUTER)
+        else:
+            run_backend()
+        base_url = os.environ.get("VR_E2E_BASE_URL")
+        if base_url:
+            log_dir = tempfile.mkdtemp(prefix="viberouter-ui-e2e-")
+            ui_passed = run_playwright(base_url, os.path.join(log_dir, "playwright.log"))
+        else:
+            skip("UI Playwright（REMOTE 未显式设置 VR_E2E_BASE_URL）")
+        print_summary(ui_passed)
+        return 1 if FAIL or ui_passed is False else 0
+
+    if len(sys.argv) != 3:
+        print("usage: python run_tests.py <viberouter.exe> <mockupstream.exe>", file=sys.stderr)
+        return 2
+    router_exe = os.path.abspath(sys.argv[1])
+    mock_exe = os.path.abspath(sys.argv[2])
+    workdir = tempfile.mkdtemp(prefix="viberouter-e2e-")
+    log_dir = os.path.join(workdir, "process-logs")
+    config_path = os.path.join(workdir, "config.yaml")
+    env_path = os.path.join(workdir, ".env")
+    write_file(config_path, CONFIG)
+    write_file(env_path)
+    print(f"E2E workdir: {workdir}")
+    state = {"mock": None, "router": None, "ui": None}
+
+    def start_router():
+        return launch("router", [router_exe, "-config", config_path, "-env", env_path],
+                      workdir, os.path.join(log_dir, "router.log"))
+
+    def restart_router():
+        stop_process(state["router"])
+        state["router"] = start_router()
+        if not wait_ready(ROUTER + "/"):
+            raise RuntimeError("router did not become ready after restart; see " +
+                               os.path.join(log_dir, "router.log"))
+
+    try:
+        state["mock"] = launch("mock", [mock_exe, "-port", str(MOCK_PORT)], workdir,
+                               os.path.join(log_dir, "mock.log"))
+        if not wait_ready(MOCK + "/user/balance"):
+            raise RuntimeError("mock not ready; see " + os.path.join(log_dir, "mock.log"))
+        state["router"] = start_router()
+        if not wait_ready(ROUTER + "/"):
+            raise RuntimeError("router not ready; see " + os.path.join(log_dir, "router.log"))
+        run_backend(config_path=config_path, restart_router=restart_router)
+    except Exception as exc:
+        check("本地后端启动/执行", False, f"{type(exc).__name__}: {exc}")
+    finally:
+        stop_process(state["router"])
+        state["router"] = None
+
+    try:
+        ui_workdir = os.path.join(workdir, "ui")
+        os.makedirs(ui_workdir, exist_ok=True)
+        ui_config = os.path.join(ui_workdir, "config.yaml")
+        ui_env = os.path.join(ui_workdir, ".env")
+        write_file(ui_config, f"""
+server: {{addr: "127.0.0.1:{UI_PORT}", disable_captcha: true}}
+routing: {{long_context_threshold: 200000, dispatcher_timeout_sec: 5, strategy: round_robin}}
+providers: []
+models: []
+groups: []
+web_tools:
+  enabled: false
+  mcp_enabled: false
+  search_provider: deepseek
+  fetch_provider: deepseek
+  timeout_sec: 5
+  max_calls: 4
+  providers: []
+keys:
+  - {{id: ui-k1, key: {KEY}, name: e2e, enabled: true, created_at: "2026-08-15T00:00:00Z"}}
+logs: {{file: "logs/ui-e2e.log", retention_days: 7}}
+""")
+        write_file(ui_env)
+        state["ui"] = launch("ui-router", [router_exe, "-config", ui_config, "-env", ui_env],
+                             ui_workdir, os.path.join(log_dir, "ui-router.log"))
+        ui_url = f"http://127.0.0.1:{UI_PORT}"
+        if not wait_ready(ui_url + "/"):
+            raise RuntimeError("UI router not ready; see " + os.path.join(log_dir, "ui-router.log"))
+        ui_passed = run_playwright(ui_url, os.path.join(log_dir, "playwright.log"))
+    except Exception as exc:
+        ui_passed = False
+        print(f"  UI FAIL {type(exc).__name__}: {exc}")
+    finally:
+        stop_process(state["ui"])
+        state["ui"] = None
+        stop_process(state["mock"])
+        state["mock"] = None
+
+    print_summary(ui_passed)
+    return 1 if FAIL or ui_passed is False else 0
 
 
 def run_all():
@@ -271,6 +461,22 @@ def run_all():
     check("智能调度: header 强制 advanced",
           "MOCK[chat]" in r.json()["choices"][0]["message"]["content"], r.text[:200])
 
+    r = oai.chat.completions.create(model="smart-basic-only",
+                                    messages=[{"role": "user", "content": "hello"}])
+    check("智能调度: 仅普通组可用时直接路由",
+          "MOCK[anthropic]" in r.choices[0].message.content, r.choices[0].message.content)
+
+    r = oai.chat.completions.create(model="smart-vision", messages=[{"role": "user", "content": [
+        {"type": "text", "text": "describe image"},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{TINY_PNG}"}}]}])
+    check("智能调度: 多模态能力过滤直接选择强组",
+          "MOCK[chat]" in r.choices[0].message.content, r.choices[0].message.content)
+
+    r = oai.chat.completions.create(model="smart",
+                                    messages=[{"role": "user", "content": "invalid-json"}])
+    check("智能调度: 非法 JSON 降级普通组",
+          "MOCK[anthropic]" in r.choices[0].message.content, r.choices[0].message.content)
+
     print("\n--- E. 管理端 ---")
     tok = requests.post(ROUTER + "/api/login",
                         json={"username": "admin", "password": "admin"}).json()["token"]
@@ -298,6 +504,15 @@ def run_all():
           lb_log and lb_log[0].get("attempts") == 2, str(lb_log[:1]))
     smart_log = [l for l in logs if l.get("request_model") == "smart" and l.get("tier")]
     check("日志记录 tier", bool(smart_log), str(logs[:1]))
+    basic_only_log = [l for l in logs if l.get("request_model") == "smart-basic-only"]
+    check("仅普通组可用时不调用调度器",
+          basic_only_log and not basic_only_log[0].get("dispatcher_error"), str(basic_only_log[:1]))
+    vision_log = [l for l in logs if l.get("request_model") == "smart-vision"]
+    check("能力直达强组时不调用调度器",
+          vision_log and vision_log[0].get("tier") == "advanced"
+          and not vision_log[0].get("dispatcher_error"), str(vision_log[:1]))
+    check("非法调度输出记录降级原因",
+          any("unparseable" in l.get("dispatcher_error", "") for l in smart_log), str(smart_log[:1]))
 
     models = requests.get(ROUTER + "/v1/models", headers={"Authorization": f"Bearer {KEY}"}).json()
     ids = [m["id"] for m in models["data"]]
@@ -320,6 +535,55 @@ def run_all():
     check("日志: key 过滤", logs_k and all(l.get("key_name") == "e2e" for l in logs_k),
           str(logs_k[:1]))
 
+    print("\n--- F. Web 工具与 MCP ---")
+    r = oai.responses.create(model="m-chat", input="hosted search",
+                             tools=[{"type": "web_search"}])
+    check("Responses 原生 web_search",
+          any(getattr(item, "type", "") == "web_search_call" for item in r.output)
+          and "MOCK[chat]" in r.output_text, str(r.output))
+
+    with oai.responses.stream(model="m-chat", input="hosted search stream",
+                              tools=[{"type": "web_search"}]) as stream:
+        r = stream.get_final_response()
+    check("Responses web_search SSE",
+          any(getattr(item, "type", "") == "web_search_call" for item in r.output)
+          and "MOCK[chat]" in r.output_text, str(r.output))
+
+    r = ant.messages.create(model="m-chat", max_tokens=500,
+                            messages=[{"role": "user", "content": "hosted search"}],
+                            tools=[{"type": "web_search_20250305", "name": "web_search"}])
+    check("Anthropic 原生 web_search",
+          any(getattr(block, "type", "") == "web_search_tool_result" for block in r.content), str(r.content))
+
+    with ant.messages.stream(model="m-chat", max_tokens=500,
+                             messages=[{"role": "user", "content": "hosted fetch stream"}],
+                             tools=[{"type": "web_fetch_20250910", "name": "web_fetch"}]) as stream:
+        r = stream.get_final_message()
+    check("Anthropic web_fetch SSE",
+          any(getattr(block, "type", "") == "web_fetch_tool_result" for block in r.content), str(r.content))
+
+    mcp_headers = {"Authorization": f"Bearer {KEY}",
+                   "Accept": "application/json, text/event-stream",
+                   "Content-Type": "application/json"}
+    r = requests.post(ROUTER + "/mcp", headers=mcp_headers,
+                      json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                            "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                                       "clientInfo": {"name": "e2e", "version": "1"}}})
+    check("MCP initialize", r.status_code == 200
+          and r.json().get("result", {}).get("serverInfo", {}).get("name") == "viberouter", r.text[:200])
+    mcp_headers["MCP-Protocol-Version"] = "2025-11-25"
+    r = requests.post(ROUTER + "/mcp", headers=mcp_headers,
+                      json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+    check("MCP tools/list", {tool.get("name") for tool in r.json().get("result", {}).get("tools", [])}
+          == {"web_search", "web_fetch"}, r.text[:200])
+    r = requests.post(ROUTER + "/mcp", headers=mcp_headers,
+                      json={"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                            "params": {"name": "web_search", "arguments": {"query": "latest news", "count": 1}}})
+    result = r.json().get("result", {})
+    check("MCP 统一搜索调用", result.get("structuredContent", {}).get("provider") == "deepseek"
+          and result.get("structuredContent", {}).get("results", [])[0].get("url") == "https://example.com/search",
+          r.text[:300])
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

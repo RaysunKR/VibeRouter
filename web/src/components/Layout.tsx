@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Boxes,
   BrainCircuit,
+  Globe,
   KeyRound,
   LogOut,
   Route as RouteIcon,
@@ -23,6 +24,7 @@ export default function Layout() {
     { to: '/models', label: d.nav.models, icon: BrainCircuit },
     { to: '/groups', label: d.nav.groups, icon: RouteIcon },
     { to: '/keys', label: d.nav.keys, icon: KeyRound },
+    { to: '/web-tools', label: d.nav.webTools, icon: Globe },
     { to: '/logs', label: d.nav.logs, icon: ScrollText },
     { to: '/settings', label: d.nav.settings, icon: Settings },
   ]
@@ -44,6 +46,7 @@ export default function Layout() {
             <NavLink
               key={item.to}
               to={item.to}
+              data-testid={`nav-${item.to.slice(1)}`}
               className={({ isActive }) =>
                 cn(
                   'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
@@ -60,7 +63,7 @@ export default function Layout() {
         </nav>
         <div className="p-3 border-t space-y-1">
           <LangSwitch />
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={logout}>
+          <Button variant="ghost" className="w-full justify-start gap-3" data-testid="nav-logout" onClick={logout}>
             <LogOut className="h-4 w-4" />
             {d.nav.logout}
           </Button>
